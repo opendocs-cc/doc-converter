@@ -6,6 +6,14 @@ primary accent color.  The accent drives headings, links, table headers,
 and the footer brand line.  Supporting colors (alt-row backgrounds, code
 surfaces, borders) are adjusted to complement the accent.
 
+Palette convention: every accent is the **deepest usable** shade of its
+hue family (Untitled UI 800 / 900, or a custom "950" where 900 still
+reads as vibrant).  Supporting tints (``alt_row_bg`` / ``code_bg`` /
+``code_border``) use the same family's 50 and 200 weights so the
+document reads as "a wash of brand color" rather than "a highlight
+painted onto white."  Dark accents keep long-form reading calm and
+hold up on white paper.
+
 Logo handling:
     * The default 'opendocs' theme represents the **Free plan** — it
       always carries the bundled OpenDocs logo and the "Made with
@@ -59,17 +67,11 @@ def _theme(
 
 # ─── Theme definitions ─────────────────────────────────────────────────────
 
-#
-# Palette convention: every accent is the Untitled-UI **700-weight** equivalent
-# of its hue family.  Supporting tints (``alt_row_bg`` / ``code_bg`` / ``code_border``)
-# use the same family's 50 and 200 weights so the document reads as "a
-# wash of brand color" rather than "a highlight painted onto white."
-#
 THEMES: dict[str, BrandingConfig] = {
-    # ── Purple 900 — OpenDocs default (Free plan: logo + footer locked) ──
+    # ── Purple 950 — OpenDocs default (Free plan: logo + footer locked) ──
     "opendocs": _theme(
         name="OpenDocs",
-        accent="#42307D",
+        accent="#2E1C5C",
         url="https://opendocs.cc",
         url_label="opendocs.cc",
         subtitle="Made with OpenDocs.cc",
@@ -79,10 +81,10 @@ THEMES: dict[str, BrandingConfig] = {
         logo_url="bundled:opendocs",
     ),
 
-    # ── Gray 700 — understated corporate slate ─────────────────────────
+    # ── Gray 800 — understated corporate slate ─────────────────────────
     "charcoal": _theme(
         name="Greystone Consulting",
-        accent="#344054",
+        accent="#1D2939",
         url="https://greystone.io",
         url_label="greystone.io",
         subtitle="Confidential",
@@ -92,10 +94,10 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#EAECF0",
     ),
 
-    # ── Success 700 — forest / sustainability ──────────────────────────
+    # ── Success 900 — forest / sustainability ──────────────────────────
     "green": _theme(
         name="Verdant Analytics",
-        accent="#027A48",
+        accent="#054F31",
         url="https://verdant.eco",
         url_label="verdant.eco",
         subtitle="Sustainable Intelligence",
@@ -104,10 +106,10 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#A6F4C5",
     ),
 
-    # ── Blue-dark 700 — classic royal blue ─────────────────────────────
+    # ── Blue 900 — classic royal blue, deeper ──────────────────────────
     "blue": _theme(
         name="Northwave Systems",
-        accent="#175CD3",
+        accent="#194185",
         url="https://northwave.dev",
         url_label="northwave.dev",
         subtitle="Engineering Excellence",
@@ -116,10 +118,10 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#B2CCFF",
     ),
 
-    # ── Indigo 700 — deep blue-purple, premium feel ────────────────────
+    # ── Indigo 900 — midnight blue-purple ──────────────────────────────
     "indigo": _theme(
         name="Helios Capital",
-        accent="#3538CD",
+        accent="#2D3282",
         url="https://helioscap.com",
         url_label="helioscap.com",
         subtitle="Private & Confidential",
@@ -128,10 +130,10 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#C7D7FE",
     ),
 
-    # ── Violet 700 — electric but grounded ─────────────────────────────
+    # ── Violet 900 — imperial purple ───────────────────────────────────
     "violet": _theme(
         name="Prism Research",
-        accent="#5925DC",
+        accent="#3E1C96",
         url="https://prismresearch.org",
         url_label="prismresearch.org",
         subtitle="Advancing Discovery",
@@ -140,10 +142,10 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#D9D6FE",
     ),
 
-    # ── Fuchsia 700 — berry, not neon ──────────────────────────────────
+    # ── Fuchsia 900 — berry, serious ───────────────────────────────────
     "fuchsia": _theme(
         name="Bloom Health",
-        accent="#9F1AB1",
+        accent="#6F1574",
         url="https://bloomhealth.co",
         url_label="bloomhealth.co",
         subtitle="Patient-First Innovation",
@@ -152,10 +154,10 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#F6D0FE",
     ),
 
-    # ── Error 700 — crimson, serious ───────────────────────────────────
+    # ── Error 900 — crimson, restrained ────────────────────────────────
     "red": _theme(
         name="Ember Security",
-        accent="#B42318",
+        accent="#7A271A",
         url="https://embersec.io",
         url_label="embersec.io",
         subtitle="Threat Intelligence Report",
@@ -164,10 +166,10 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#FECDCA",
     ),
 
-    # ── Orange-dark 700 — rust / terracotta, warm ──────────────────────
+    # ── Orange-dark 900 — mahogany / terracotta ────────────────────────
     "orange": _theme(
         name="Forge Industrial",
-        accent="#B93815",
+        accent="#772917",
         url="https://forgeindustrial.com",
         url_label="forgeindustrial.com",
         subtitle="Built to Last",
@@ -176,30 +178,111 @@ THEMES: dict[str, BrandingConfig] = {
         code_border="#F9DBAF",
     ),
 
-    # ── Teal 700 — deep teal for tech / medical / legal ────────────────
-    "teal": _theme(
-        name="Tidewater Clinical",
-        accent="#107569",
-        url="https://tidewaterclinical.com",
-        url_label="tidewaterclinical.com",
-        subtitle="Evidence-Based Care",
-        alt_row="#F0FDF9",
-        code_bg="#F0FDF9",
-        code_border="#99F6E0",
-    ),
-
-    # ── Warning 700 — amber / gold, premium finance & legal ────────────
-    "amber": _theme(
-        name="Aurum Legal",
-        accent="#B54708",
-        url="https://aurumlegal.com",
-        url_label="aurumlegal.com",
-        subtitle="Counsel Since 1987",
-        alt_row="#FFFAEB",
-        code_bg="#FFFAEB",
-        code_border="#FEDF89",
+    # ── Navy — deep Oxford blue, the "safe" document color ─────────────
+    # Typical for legal memos, government reports, finance whitepapers
+    # and other contexts where conservatism matters more than brand
+    # expression.  Reads calm and authoritative on white.
+    "navy": _theme(
+        name="Atlas Advisory",
+        accent="#14306E",
+        url="https://atlasadvisory.com",
+        url_label="atlasadvisory.com",
+        subtitle="Strategic Counsel",
+        alt_row="#EFF4FF",
+        code_bg="#EFF4FF",
+        code_border="#B2CCFF",
     ),
 }
+
+
+# ─── Custom-accent palette derivation ─────────────────────────────────────
+
+def _hex_to_rgb(s: str) -> tuple[int, int, int]:
+    """Parse ``#RRGGBB`` or ``RRGGBB`` into ``(r, g, b)``.  Raises
+    ``ValueError`` if the input isn't a valid 6-char hex."""
+    h = s.strip().lstrip("#")
+    if len(h) != 6 or any(c not in "0123456789abcdefABCDEF" for c in h):
+        raise ValueError(f"Invalid hex color: {s!r}")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _mix_with_white(accent: str, white_pct: float) -> str:
+    """Return ``accent`` linearly mixed with white.
+
+    ``white_pct=0.94`` means 94% white, 6% accent — a near-white wash
+    suitable for alt-row striping.  ``white_pct=0.78`` produces a more
+    visible tint suitable for code-block borders.  The mix is done in
+    sRGB channel space, which is a simplification (perceptually
+    linear mixing would use OKLCH), but is plenty accurate at these
+    high white percentages where the result is dominated by white.
+    """
+    r, g, b = _hex_to_rgb(accent)
+    new_r = round(r * (1 - white_pct) + 255 * white_pct)
+    new_g = round(g * (1 - white_pct) + 255 * white_pct)
+    new_b = round(b * (1 - white_pct) + 255 * white_pct)
+    return _rgb_to_hex(new_r, new_g, new_b)
+
+
+def brand_from_accent(
+    accent: str,
+    *,
+    company_name: str = "",
+    company_url: str = "",
+    company_url_label: str = "",
+    footer_subtitle: str | None = None,
+    logo_url: str | None = None,
+    font_main: str = "Arial",
+    font_code: str = "Courier New",
+) -> BrandingConfig:
+    """Derive a full BrandingConfig from a single accent hex.
+
+    The accent drives the four locations that need to read as "the
+    brand color" on the page: heading text, hyperlinks, table header
+    fill, and the footer brand line.  Supporting tints (alt-row / code
+    backgrounds and code border) are mixed from the accent + white so
+    each theme feels like a wash of its own hue rather than a highlight
+    painted onto white.  Body text, metadata, and borders stay neutral.
+
+    This is the Pro-plan "custom color" entry point: the customer
+    passes a single hex value (their brand color), and the converter
+    tailors every surface of the document around it.  Identity fields
+    (company_name, logo_url, footer_subtitle) can be layered on via
+    keyword args; they default to the un-branded state so callers
+    who only care about color don't inherit anything surprising.
+    """
+    # Normalise input — this also validates the hex up-front so a bad
+    # value fails fast rather than producing a half-built BrandingConfig.
+    r, g, b = _hex_to_rgb(accent)
+    accent = _rgb_to_hex(r, g, b)
+
+    tint_50 = _mix_with_white(accent, 0.94)   # Near-white wash
+    tint_200 = _mix_with_white(accent, 0.78)  # Visible-but-soft border
+
+    return BrandingConfig(
+        heading_color=accent,
+        body_color="#171717",
+        metadata_color="#737373",
+        link_color=accent,
+        table_header_bg=accent,
+        table_header_fg="#FFFFFF",
+        alt_row_bg=tint_50,
+        border_color="#E5E5E5",
+        code_bg=tint_50,
+        code_border=tint_200,
+        footer_bold_color=accent,
+        footer_normal_color="#737373",
+        font_main=font_main,
+        font_code=font_code,
+        company_name=company_name,
+        company_url=company_url,
+        company_url_label=company_url_label,
+        footer_subtitle=footer_subtitle,
+        logo_url=logo_url,
+    )
 
 
 # ─── Plan-aware helpers ────────────────────────────────────────────────────

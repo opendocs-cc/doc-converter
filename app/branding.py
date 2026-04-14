@@ -12,11 +12,18 @@ from pydantic import BaseModel, Field
 
 
 class BrandingConfig(BaseModel):
-    """All visual knobs for a converted document."""
+    """All visual knobs for a converted document.
+
+    The field defaults match the **OpenDocs house style** — a deep
+    Purple-950 accent (``#2E1C5C``) with matching 50/200 tints.  This
+    means ``BrandingConfig()`` produces the same look as the
+    ``"opendocs"`` theme (minus the bundled logo; set ``logo_url``
+    explicitly for that).
+    """
 
     # ── Accent / structural colors ──────────────────────────────────────
     heading_color: str = Field(
-        default="#53389E",
+        default="#2E1C5C",
         description="Heading text (H1-H4)",
     )
     body_color: str = Field(
@@ -28,13 +35,13 @@ class BrandingConfig(BaseModel):
         description="Metadata lines (small italic text at doc top)",
     )
     link_color: str = Field(
-        default="#53389E",
+        default="#2E1C5C",
         description="Hyperlink text",
     )
 
     # ── Table colors ────────────────────────────────────────────────────
     table_header_bg: str = Field(
-        default="#53389E",
+        default="#2E1C5C",
         description="Table header row background",
     )
     table_header_fg: str = Field(
@@ -42,7 +49,7 @@ class BrandingConfig(BaseModel):
         description="Table header row text",
     )
     alt_row_bg: str = Field(
-        default="#FAFAFA",
+        default="#F9F5FF",
         description="Alternating table row background (zebra stripe)",
     )
     border_color: str = Field(
@@ -52,17 +59,17 @@ class BrandingConfig(BaseModel):
 
     # ── Code block colors ───────────────────────────────────────────────
     code_bg: str = Field(
-        default="#FAFAFA",
+        default="#F9F5FF",
         description="Code block background shading",
     )
     code_border: str = Field(
-        default="#E5E5E5",
+        default="#E9D7FE",
         description="Code block border",
     )
 
     # ── Footer colors ───────────────────────────────────────────────────
     footer_bold_color: str = Field(
-        default="#53389E",
+        default="#2E1C5C",
         description="Company/brand name in footer (bold line)",
     )
     footer_normal_color: str = Field(
@@ -73,7 +80,14 @@ class BrandingConfig(BaseModel):
     # ── Fonts ───────────────────────────────────────────────────────────
     font_main: str = Field(
         default="Arial",
-        description="Primary font for all non-code text",
+        description=(
+            "Primary font for all non-code text.  Curated options bundled "
+            "in the Docker image: 'Arial' (default), 'Inter' (modern sans), "
+            "'Lato' (warm humanist sans), 'Vollkorn' (editorial serif).  "
+            "Any font name may be passed; if the font is not installed on "
+            "the rendering box, LibreOffice substitutes a similar one when "
+            "producing PDF."
+        ),
     )
     font_code: str = Field(
         default="Courier New",

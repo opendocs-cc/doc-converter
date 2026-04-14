@@ -93,20 +93,31 @@ Pass a `branding` object to override any color, font, or identity value. All fie
 
 | Property | Default | Used for |
 |----------|---------|----------|
-| `heading_color` | `#7F56D9` | All heading text (H1-H4) |
+| `heading_color` | `#2E1C5C` | All heading text (H1-H4) |
 | `body_color` | `#171717` | Body text, lists, code text, table body |
 | `metadata_color` | `#737373` | Metadata lines (small italic at doc top) |
-| `link_color` | `#7F56D9` | Hyperlink text |
-| `table_header_bg` | `#7F56D9` | Table header row background |
+| `link_color` | `#2E1C5C` | Hyperlink text |
+| `table_header_bg` | `#2E1C5C` | Table header row background |
 | `table_header_fg` | `#FFFFFF` | Table header row text |
-| `alt_row_bg` | `#FAFAFA` | Alternating table row background |
+| `alt_row_bg` | `#F9F5FF` | Alternating table row background |
 | `border_color` | `#E5E5E5` | Table borders, horizontal rule |
-| `code_bg` | `#FAFAFA` | Code block background |
-| `code_border` | `#E5E5E5` | Code block border |
-| `footer_bold_color` | `#7F56D9` | Company name in footer |
+| `code_bg` | `#F9F5FF` | Code block background |
+| `code_border` | `#E9D7FE` | Code block border |
+| `footer_bold_color` | `#2E1C5C` | Company name in footer |
 | `footer_normal_color` | `#737373` | Footer subtitle / URL |
 | `font_main` | `Arial` | All non-code text |
 | `font_code` | `Courier New` | Code blocks and inline code |
+
+### Font options
+
+`font_main` can be any font name. Four are bundled in the Docker image:
+
+| Name | Character |
+|------|-----------|
+| `Arial` *(default)* | Neutral, universal |
+| `Inter` | Modern geometric sans |
+| `Lato` | Warm humanist sans |
+| `Vollkorn` | Editorial serif (legal / finance / academic) |
 
 ### Identity fields
 
@@ -116,7 +127,7 @@ Pass a `branding` object to override any color, font, or identity value. All fie
 | `company_url` | `https://opendocs.cc` | Footer hyperlink |
 | `company_url_label` | `opendocs.cc` | Display text for footer URL |
 | `footer_subtitle` | `Made with OpenDocs.cc` | Second line in footer |
-| `logo_url` | `null` | URL to download header logo (falls back to bundled logo) |
+| `logo_url` | `null` | Header logo: `null` (no logo), `"bundled:opendocs"` (packaged logo), or `"https://..."` (downloaded at request time) |
 
 ## Formulas
 

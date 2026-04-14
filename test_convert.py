@@ -15,7 +15,7 @@ import subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.converter import convert_md_to_docx
-from app.themes import THEMES, free_plan_brand, pro_plan_brand
+from app.themes import THEMES, brand_from_accent, free_plan_brand, pro_plan_brand
 
 MD_DIR = os.path.join(os.path.dirname(__file__), "testing-docs", "md")
 EXPORT_DIR = os.path.join(os.path.dirname(__file__), "testing-docs", "exports")
@@ -147,6 +147,31 @@ def main():
     )
     result = convert_one(md_text, pro_blank, f"{base}_pro_unbranded", lo_available)
     print(f"  {'pro_unbranded':<22} {'(none — no footer)':<30} {result}")
+
+    # --- Pass 4: Custom-accent derivation (Pro plan "one hex" shortcut) ---
+    # Each hex is picked to fall OUTSIDE the pre-built themes so the pass
+    # genuinely exercises brand_from_accent() rather than rediscovering
+    # an existing palette.
+    print(f"\n═══ Custom accent colors (brand_from_accent) ═══")
+    print(f"  {'Accent':<12} {'Label':<28} {'DOCX':>8}  {'PDF':>8}")
+    print(f"  {'-'*60}")
+    custom_accents = [
+        ("#B91C1C", "red-700 (vivid crimson)"),
+        ("#0E7490", "cyan-700 (sea)"),
+        ("#9A3412", "orange-800 (rust)"),
+        ("#4338CA", "indigo-700 (saturated)"),
+    ]
+    for accent, label in custom_accents:
+        brand = brand_from_accent(
+            accent,
+            company_name="Custom Accent Demo",
+            company_url="https://example.com",
+            company_url_label="example.com",
+            footer_subtitle=label,
+        )
+        tag = accent.lstrip("#").lower()
+        result = convert_one(md_text, brand, f"{base}_accent_{tag}", lo_available)
+        print(f"  {accent:<12} {label:<28} {result}")
 
     print(f"\nDone. All exports in: {EXPORT_DIR}")
 

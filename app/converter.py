@@ -192,7 +192,16 @@ def _set_cell_borders(cell, color_hex: str = "E5E5E5", size: str = "4"):
     tc_pr.append(borders)
 
 
-def _set_cell_padding(cell, v_padding_inches=0.02, h_padding_inches=0.05):
+def _set_cell_padding(cell, v_padding_inches=0.2, h_padding_inches=0.08):
+    """Set cell margins (tcMar).  Note: the paragraph inside the cell still
+    inherits Normal's ``space_before``/``space_after``, which is the bigger
+    lever for vertical whitespace.  Use ``_set_cell_paragraph_tight()`` on
+    the contained paragraph to keep rows compact.
+
+    The v_padding default of 0.2 in (~14.4 pt per side, ~28.8 pt total)
+    gives airy, generously-spaced rows — the kind of table you see in
+    report-style documents rather than dense data grids.  Horizontal
+    padding stays at 0.08 in so cells don't end up visually stretched."""
     tc_pr = cell._tc.get_or_add_tcPr()
     v_val = str(int(v_padding_inches * 1440))
     h_val = str(int(h_padding_inches * 1440))
@@ -205,6 +214,17 @@ def _set_cell_padding(cell, v_padding_inches=0.02, h_padding_inches=0.05):
         f"</w:tcMar>"
     )
     tc_pr.append(margins)
+
+
+def _set_cell_paragraph_tight(p):
+    """Zero out paragraph spacing inside a table cell.
+
+    Without this, cell paragraphs inherit Normal's ~12pt space before/after
+    which visually inflates every row.  Tables want compact rows, not
+    body-paragraph whitespace."""
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.15
 
 
 def _set_table_repeat_header(row):
@@ -276,8 +296,6 @@ def _add_footer(doc: Document, brand: BrandingConfig):
 def _add_header(doc: Document, logo_path: str):
     """Add a logo to the top-right of every page header."""
     for section in doc.sections:
-        section.header_distance = Cm(0.762)
-        section.footer_distance = Cm(0.762)
         header = section.header
         header.is_linked_to_previous = False
         p = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
@@ -493,6 +511,11 @@ class DocxBuilder:
             section.bottom_margin = Cm(2.5)
             section.left_margin = Cm(2.5)
             section.right_margin = Cm(2.5)
+            # Word's defaults are 0.5 in for both — pulling them in to
+            # 0.3 in gives the page more usable vertical real estate
+            # and tucks the logo/footer closer to the content area.
+            section.header_distance = Inches(0.3)
+            section.footer_distance = Inches(0.3)
 
     # ── Style setup ─────────────────────────────────────────────────────
 
@@ -841,6 +864,7 @@ class DocxBuilder:
             _set_cell_padding(cell)
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
             p = cell.paragraphs[0]
+            _set_cell_paragraph_tight(p)
             if alignments and i < len(alignments):
                 if alignments[i] == "center":
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -864,6 +888,7 @@ class DocxBuilder:
                 if row_idx % 2 == 1:
                     _set_cell_shading(cell, self._h_alt_row)
                 p = cell.paragraphs[0]
+                _set_cell_paragraph_tight(p)
                 if alignments and i < len(alignments):
                     if alignments[i] == "center":
                         p.alignment = WD_ALIGN_PARAGRAPH.CENTER

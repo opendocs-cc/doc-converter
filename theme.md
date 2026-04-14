@@ -2,23 +2,22 @@
 
 ## Available themes
 
-11 pre-built themes are defined in `app/themes.py`. Each is a full `BrandingConfig` built from a single primary accent color, with complementary surface and border tones.
+10 pre-built themes are defined in `app/themes.py`. Each is a full `BrandingConfig` built from a single primary accent color, with complementary surface and border tones.
 
-All accents are drawn from the **Untitled UI 700-weight** palette (the OpenDocs default is Purple-900, slightly deeper). The 700 weight is deliberate: it reads as coloured ink rather than a UI highlight, so headings and link runs don't feel "neon" on a white page.
+All accents are drawn from the deepest usable shade of their hue family — **Untitled UI 800 / 900**, with a custom "950" for OpenDocs purple. The deeper weight is deliberate: vibrant 500–700 shades read as a UI highlight on a white page, whereas a 900 reads as ink. Long-form docs stay calm and print well.
 
 | Theme | Accent | Company Name | Vibe |
 |-------|:------:|--------------|------|
-| `opendocs` | `#42307D` | OpenDocs | Deep purple — the default |
-| `charcoal` | `#344054` | Greystone Consulting | Slate, corporate, understated |
-| `green` | `#027A48` | Verdant Analytics | Forest, sustainability, growth |
-| `blue` | `#175CD3` | Northwave Systems | Royal blue, trust, enterprise |
-| `indigo` | `#3538CD` | Helios Capital | Deep indigo, finance, premium |
-| `violet` | `#5925DC` | Prism Research | Electric violet, creative, research |
-| `fuchsia` | `#9F1AB1` | Bloom Health | Berry, healthcare, bold |
-| `red` | `#B42318` | Ember Security | Crimson, urgency, security |
-| `orange` | `#B93815` | Forge Industrial | Rust, construction, warmth |
-| `teal` | `#107569` | Tidewater Clinical | Deep teal, clinical, tech |
-| `amber` | `#B54708` | Aurum Legal | Gold, legal, premium |
+| `opendocs` | `#2E1C5C` | OpenDocs | Deep purple — the default |
+| `charcoal` | `#1D2939` | Greystone Consulting | Slate, corporate, understated |
+| `green` | `#054F31` | Verdant Analytics | Forest, sustainability, growth |
+| `blue` | `#194185` | Northwave Systems | Royal blue, trust, enterprise |
+| `indigo` | `#2D3282` | Helios Capital | Midnight indigo, finance, premium |
+| `violet` | `#3E1C96` | Prism Research | Imperial violet, creative, research |
+| `fuchsia` | `#6F1574` | Bloom Health | Berry, healthcare, bold |
+| `red` | `#7A271A` | Ember Security | Crimson, urgency, security |
+| `orange` | `#772917` | Forge Industrial | Mahogany, construction, warmth |
+| `navy` | `#14306E` | Atlas Advisory | Oxford navy — legal / finance / government "safe" blue |
 
 ## Full color breakdown per theme
 
@@ -28,10 +27,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#42307D` | Heading text |
-| `link_color` | `#42307D` | Hyperlinks |
-| `table_header_bg` | `#42307D` | Table header fill |
-| `footer_bold_color` | `#42307D` | Footer brand name |
+| `heading_color` | `#2E1C5C` | Heading text |
+| `link_color` | `#2E1C5C` | Hyperlinks |
+| `table_header_bg` | `#2E1C5C` | Table header fill |
+| `footer_bold_color` | `#2E1C5C` | Footer brand name |
 | `body_color` | `#171717` | Body text |
 | `metadata_color` | `#737373` | Metadata |
 | `footer_normal_color` | `#737373` | Footer subtitle |
@@ -45,10 +44,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#344054` | Heading text |
-| `link_color` | `#344054` | Hyperlinks |
-| `table_header_bg` | `#344054` | Table header fill |
-| `footer_bold_color` | `#344054` | Footer brand name |
+| `heading_color` | `#1D2939` | Heading text |
+| `link_color` | `#1D2939` | Hyperlinks |
+| `table_header_bg` | `#1D2939` | Table header fill |
+| `footer_bold_color` | `#1D2939` | Footer brand name |
 | `alt_row_bg` | `#F9FAFB` | Zebra stripe (gray-50) |
 | `code_bg` | `#F9FAFB` | Code background (gray-50) |
 | `border_color` | `#D0D5DD` | Borders (gray-300) |
@@ -58,10 +57,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#027A48` | Heading text |
-| `link_color` | `#027A48` | Hyperlinks |
-| `table_header_bg` | `#027A48` | Table header fill |
-| `footer_bold_color` | `#027A48` | Footer brand name |
+| `heading_color` | `#054F31` | Heading text |
+| `link_color` | `#054F31` | Hyperlinks |
+| `table_header_bg` | `#054F31` | Table header fill |
+| `footer_bold_color` | `#054F31` | Footer brand name |
 | `alt_row_bg` | `#ECFDF3` | Zebra stripe (success-50) |
 | `code_bg` | `#ECFDF3` | Code background (success-50) |
 | `code_border` | `#A6F4C5` | Code border (success-200) |
@@ -70,10 +69,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#175CD3` | Heading text |
-| `link_color` | `#175CD3` | Hyperlinks |
-| `table_header_bg` | `#175CD3` | Table header fill |
-| `footer_bold_color` | `#175CD3` | Footer brand name |
+| `heading_color` | `#194185` | Heading text |
+| `link_color` | `#194185` | Hyperlinks |
+| `table_header_bg` | `#194185` | Table header fill |
+| `footer_bold_color` | `#194185` | Footer brand name |
 | `alt_row_bg` | `#EFF4FF` | Zebra stripe (blue-50) |
 | `code_bg` | `#EFF4FF` | Code background (blue-50) |
 | `code_border` | `#B2CCFF` | Code border (blue-200) |
@@ -82,10 +81,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#3538CD` | Heading text |
-| `link_color` | `#3538CD` | Hyperlinks |
-| `table_header_bg` | `#3538CD` | Table header fill |
-| `footer_bold_color` | `#3538CD` | Footer brand name |
+| `heading_color` | `#2D3282` | Heading text |
+| `link_color` | `#2D3282` | Hyperlinks |
+| `table_header_bg` | `#2D3282` | Table header fill |
+| `footer_bold_color` | `#2D3282` | Footer brand name |
 | `alt_row_bg` | `#EEF4FF` | Zebra stripe (indigo-50) |
 | `code_bg` | `#EEF4FF` | Code background (indigo-50) |
 | `code_border` | `#C7D7FE` | Code border (indigo-200) |
@@ -94,10 +93,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#5925DC` | Heading text |
-| `link_color` | `#5925DC` | Hyperlinks |
-| `table_header_bg` | `#5925DC` | Table header fill |
-| `footer_bold_color` | `#5925DC` | Footer brand name |
+| `heading_color` | `#3E1C96` | Heading text |
+| `link_color` | `#3E1C96` | Hyperlinks |
+| `table_header_bg` | `#3E1C96` | Table header fill |
+| `footer_bold_color` | `#3E1C96` | Footer brand name |
 | `alt_row_bg` | `#F4F3FF` | Zebra stripe (violet-50) |
 | `code_bg` | `#F4F3FF` | Code background (violet-50) |
 | `code_border` | `#D9D6FE` | Code border (violet-200) |
@@ -106,10 +105,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#9F1AB1` | Heading text |
-| `link_color` | `#9F1AB1` | Hyperlinks |
-| `table_header_bg` | `#9F1AB1` | Table header fill |
-| `footer_bold_color` | `#9F1AB1` | Footer brand name |
+| `heading_color` | `#6F1574` | Heading text |
+| `link_color` | `#6F1574` | Hyperlinks |
+| `table_header_bg` | `#6F1574` | Table header fill |
+| `footer_bold_color` | `#6F1574` | Footer brand name |
 | `alt_row_bg` | `#FDF4FF` | Zebra stripe (fuchsia-50) |
 | `code_bg` | `#FDF4FF` | Code background (fuchsia-50) |
 | `code_border` | `#F6D0FE` | Code border (fuchsia-200) |
@@ -118,10 +117,10 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#B42318` | Heading text |
-| `link_color` | `#B42318` | Hyperlinks |
-| `table_header_bg` | `#B42318` | Table header fill |
-| `footer_bold_color` | `#B42318` | Footer brand name |
+| `heading_color` | `#7A271A` | Heading text |
+| `link_color` | `#7A271A` | Hyperlinks |
+| `table_header_bg` | `#7A271A` | Table header fill |
+| `footer_bold_color` | `#7A271A` | Footer brand name |
 | `alt_row_bg` | `#FEF3F2` | Zebra stripe (error-50) |
 | `code_bg` | `#FEF3F2` | Code background (error-50) |
 | `code_border` | `#FECDCA` | Code border (error-200) |
@@ -130,37 +129,27 @@ Each theme sets all 12 color properties. The primary accent drives 4 of them (he
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#B93815` | Heading text |
-| `link_color` | `#B93815` | Hyperlinks |
-| `table_header_bg` | `#B93815` | Table header fill |
-| `footer_bold_color` | `#B93815` | Footer brand name |
+| `heading_color` | `#772917` | Heading text |
+| `link_color` | `#772917` | Hyperlinks |
+| `table_header_bg` | `#772917` | Table header fill |
+| `footer_bold_color` | `#772917` | Footer brand name |
 | `alt_row_bg` | `#FEF6EE` | Zebra stripe (orange-50) |
 | `code_bg` | `#FEF6EE` | Code background (orange-50) |
 | `code_border` | `#F9DBAF` | Code border (orange-200) |
 
-### teal
+### navy
+
+The "safe" color — an Oxford-style deep navy for formal documents where conservatism matters more than brand expression. Legal memos, finance whitepapers, government reports.
 
 | Property | Value | Role |
 |----------|:-----:|------|
-| `heading_color` | `#107569` | Heading text |
-| `link_color` | `#107569` | Hyperlinks |
-| `table_header_bg` | `#107569` | Table header fill |
-| `footer_bold_color` | `#107569` | Footer brand name |
-| `alt_row_bg` | `#F0FDF9` | Zebra stripe (teal-50) |
-| `code_bg` | `#F0FDF9` | Code background (teal-50) |
-| `code_border` | `#99F6E0` | Code border (teal-200) |
-
-### amber
-
-| Property | Value | Role |
-|----------|:-----:|------|
-| `heading_color` | `#B54708` | Heading text |
-| `link_color` | `#B54708` | Hyperlinks |
-| `table_header_bg` | `#B54708` | Table header fill |
-| `footer_bold_color` | `#B54708` | Footer brand name |
-| `alt_row_bg` | `#FFFAEB` | Zebra stripe (warning-50) |
-| `code_bg` | `#FFFAEB` | Code background (warning-50) |
-| `code_border` | `#FEDF89` | Code border (warning-200) |
+| `heading_color` | `#14306E` | Heading text |
+| `link_color` | `#14306E` | Hyperlinks |
+| `table_header_bg` | `#14306E` | Table header fill |
+| `footer_bold_color` | `#14306E` | Footer brand name |
+| `alt_row_bg` | `#EFF4FF` | Zebra stripe (blue-50) |
+| `code_bg` | `#EFF4FF` | Code background (blue-50) |
+| `code_border` | `#B2CCFF` | Code border (blue-200) |
 
 ## Shared neutral values
 
@@ -175,6 +164,28 @@ These are the same across all themes (only listed once above for opendocs):
 | `font_main` | `Arial` | Primary font |
 | `font_code` | `Courier New` | Code font |
 
+## Font options
+
+The Docker image ships with four curated `font_main` options. Pass any of these by name; other fonts work too but may render with substitution.
+
+| Name | Package | Character | Good for |
+|------|---------|-----------|----------|
+| `Arial` *(default)* | `fonts-liberation` | Neutral, universal | Everything — the safe default |
+| `Inter` | `fonts-inter` | Modern geometric sans | Tech / SaaS reports, product docs |
+| `Lato` | `fonts-lato` | Warm humanist sans | Business prose, proposals |
+| `Vollkorn` | `fonts-vollkorn` | Editorial serif | Legal, finance, academic |
+
+```json
+{
+  "markdown": "# My Report",
+  "branding": {
+    "font_main": "Vollkorn"
+  }
+}
+```
+
+`font_code` stays `Courier New` by default. Change it per-request if you want a different monospace for code blocks.
+
 ## How to use a theme via the API
 
 Pass the theme's branding config in the request body:
@@ -183,13 +194,13 @@ Pass the theme's branding config in the request body:
 {
   "markdown": "# My Document\n\nContent here.",
   "branding": {
-    "heading_color": "#2563EB",
-    "link_color": "#2563EB",
-    "table_header_bg": "#2563EB",
-    "footer_bold_color": "#2563EB",
-    "alt_row_bg": "#EFF6FF",
-    "code_bg": "#EFF6FF",
-    "code_border": "#BFDBFE",
+    "heading_color": "#194185",
+    "link_color": "#194185",
+    "table_header_bg": "#194185",
+    "footer_bold_color": "#194185",
+    "alt_row_bg": "#EFF4FF",
+    "code_bg": "#EFF4FF",
+    "code_border": "#B2CCFF",
     "company_name": "Northwave Systems",
     "company_url": "https://northwave.dev",
     "company_url_label": "northwave.dev",
@@ -208,12 +219,70 @@ brand = THEMES["blue"]
 docx_bytes = convert_md_to_docx(markdown_text, brand=brand)
 ```
 
+## Custom accent colors (`brand_from_accent`)
+
+Pro-plan callers who just want to supply one brand hex can skip `branding` entirely and pass `accent_color` on the request. The converter then derives a full palette from that single value — headings, hyperlinks, table header fill, footer brand, and both tint surfaces (alt-row and code backgrounds, plus the code border).
+
+The derivation mixes the accent with white in sRGB channel space:
+
+| Surface | Mix | Typical look |
+|---------|:---:|--------------|
+| `heading_color`, `link_color`, `table_header_bg`, `footer_bold_color` | 100% accent | The four "brand" touchpoints |
+| `alt_row_bg`, `code_bg` | 94% white + 6% accent | Near-invisible hue wash |
+| `code_border` | 78% white + 22% accent | Visible but soft |
+| `body_color`, `metadata_color`, `border_color`, `footer_normal_color` | neutral (unchanged) | Always works, regardless of accent |
+
+This matches the Untitled UI 50 / 200 convention that the pre-built themes follow by hand, but generates the tints algorithmically so any brand color gets a consistent palette.
+
+### API shortcut
+
+```json
+{
+  "markdown": "# Quarterly report",
+  "accent_color": "#B91C1C"
+}
+```
+
+Combine with `branding` to layer on overrides — the accent seeds the palette, `branding` fields win on top:
+
+```json
+{
+  "markdown": "# Quarterly report",
+  "accent_color": "#0E7490",
+  "branding": {
+    "company_name": "Acme Corp",
+    "company_url": "https://acme.com",
+    "footer_subtitle": "Q2 2026 Results"
+  }
+}
+```
+
+### Python helper
+
+```python
+from app.themes import brand_from_accent
+from app.converter import convert_md_to_docx
+
+brand = brand_from_accent(
+    "#4338CA",
+    company_name="Helios Capital",
+    company_url="https://helioscap.com",
+    company_url_label="helioscap.com",
+    footer_subtitle="Private & Confidential",
+    logo_url="https://cdn.helioscap.com/logo.png",
+)
+docx_bytes = convert_md_to_docx(markdown_text, brand=brand)
+```
+
+`brand_from_accent()` validates the hex up-front (raising `ValueError` on a malformed input) and normalizes it to `#RRGGBB` before building the palette, so downstream renderers always see a canonical form.
+
 ## Design principles
 
 - **Primary accent** — one color controls headings, links, table headers, and footer brand. Changing this single value rebrands the document.
-- **Surface tones** — alt-row and code backgrounds use the 50-weight of the accent's Tailwind palette (very faint tint). Just enough warmth to feel cohesive.
-- **Code borders** — use the 200-weight of the accent palette. Visible but not loud.
-- **Neutrals stay neutral** — body text, metadata, borders, and fonts are the same across all themes. They're designed to work with any accent.
+- **Deep accents** — 800/900-weight keeps long-form reading calm. Vibrant mid-weights look like UI, not ink.
+- **Surface tones** — alt-row and code backgrounds use the 50-weight of the accent's family (very faint tint). Just enough warmth to feel cohesive.
+- **Code borders** — use the 200-weight. Visible but not loud.
+- **Neutrals stay neutral** — body text, metadata, and borders are the same across all themes. They're designed to work with any accent.
 
 ## Logo handling (Free vs. Pro plan)
 
@@ -277,13 +346,13 @@ Pro plan with custom logo from S3:
 {
   "markdown": "# Hello",
   "branding": {
-    "heading_color": "#2563EB",
-    "link_color": "#2563EB",
-    "table_header_bg": "#2563EB",
-    "footer_bold_color": "#2563EB",
-    "alt_row_bg": "#EFF6FF",
-    "code_bg": "#EFF6FF",
-    "code_border": "#BFDBFE",
+    "heading_color": "#194185",
+    "link_color": "#194185",
+    "table_header_bg": "#194185",
+    "footer_bold_color": "#194185",
+    "alt_row_bg": "#EFF4FF",
+    "code_bg": "#EFF4FF",
+    "code_border": "#B2CCFF",
     "company_name": "Northwave Systems",
     "company_url": "https://northwave.dev",
     "company_url_label": "northwave.dev",

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from .branding import BrandingConfig, OPENDOCS_BRAND
 from .converter import convert_md_to_docx
 from .pdf_renderer import convert_md_to_pdf
+from .themes import brand_from_accent
 
 # ---------------------------------------------------------------------------
 # Concurrency limiter — keeps memory bounded on a 4-vCPU / 8 GB box.
@@ -85,10 +86,43 @@ class ConvertRequest(BaseModel):
             "break is skipped — avoids a blank first page."
         ),
     )
+    accent_color: Optional[str] = Field(
+        default=None,
+        description=(
+            "Pro-plan shortcut — pass a single brand hex (e.g. '#B91C1C') "
+            "and the converter derives a full palette from it (headings, "
+            "links, table header, alt-row / code tints). Any fields in "
+            "'branding' override the derived values, so you can mix the "
+            "shortcut with explicit overrides (e.g. custom company_name)."
+        ),
+        pattern=r"^#?[0-9A-Fa-f]{6}$",
+    )
     branding: Optional[BrandingConfig] = Field(
         default=None,
         description="Custom branding overrides. Omit for OpenDocs defaults.",
     )
+
+
+def _resolve_brand(req: ConvertRequest) -> BrandingConfig:
+    """Collapse ``accent_color`` + ``branding`` into one BrandingConfig.
+
+    Precedence (low → high): OpenDocs defaults, then accent-derived palette
+    (if ``accent_color`` is set), then any fields the caller explicitly
+    provided on ``branding``.  We key off ``model_fields_set`` so unset
+    fields on ``branding`` don't silently clobber the derived palette with
+    their Pydantic defaults.
+    """
+    if req.accent_color:
+        base = brand_from_accent(req.accent_color)
+        if req.branding is not None:
+            explicit = {
+                k: getattr(req.branding, k)
+                for k in req.branding.model_fields_set
+            }
+            if explicit:
+                base = base.model_copy(update=explicit)
+        return base
+    return req.branding or OPENDOCS_BRAND
 
 
 class HealthResponse(BaseModel):
@@ -109,7 +143,7 @@ async def health():
 @app.post("/convert/docx")
 async def convert_docx(req: ConvertRequest):
     """Convert markdown to a Word document (.docx)."""
-    brand = req.branding or OPENDOCS_BRAND
+    brand = _resolve_brand(req)
 
     async with _semaphore:
         loop = asyncio.get_running_loop()
@@ -140,7 +174,7 @@ async def convert_docx(req: ConvertRequest):
 @app.post("/convert/pdf")
 async def convert_pdf(req: ConvertRequest):
     """Convert markdown to a PDF document."""
-    brand = req.branding or OPENDOCS_BRAND
+    brand = _resolve_brand(req)
 
     async with _semaphore:
         loop = asyncio.get_running_loop()

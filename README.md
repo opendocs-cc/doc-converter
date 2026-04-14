@@ -121,7 +121,35 @@ All fields except `markdown` are optional.
 | `markdown` | string | *(required)* | Raw Markdown content |
 | `filename` | string | `"document"` | Output filename (without extension) |
 | `landscape` | bool | `false` | Render in landscape A4 |
+| `accent_color` | string | `null` | Single brand hex (e.g. `"#B91C1C"`). Derives the full palette — see below |
 | `branding` | object | `null` | Custom branding overrides (see below) |
+
+### Quick custom color (`accent_color`)
+
+For the common Pro-plan case of *"I have one brand color, use it everywhere"*, pass `accent_color` as a single hex instead of filling in a full `branding` object. The converter derives a matching palette from it — headings, hyperlinks, table header fill, and footer brand all snap to the accent, and the alt-row / code backgrounds get a 6% tint of the same hue so the document reads as a wash of brand color rather than a splash on white.
+
+```bash
+curl -X POST http://localhost:8080/convert/pdf \
+  -H "Content-Type: application/json" \
+  -d '{"markdown": "# Branded doc", "accent_color": "#B91C1C"}' \
+  -o hello.pdf
+```
+
+Under the hood the derivation mixes the accent with white in sRGB channel space: **94% white** for the alt-row / code background (a near-invisible tint) and **78% white** for the code border (visible but soft). Body text, metadata, and borders stay neutral so they work with any accent.
+
+You can combine `accent_color` with `branding` — the accent seeds the palette and any explicit `branding` fields layer on top. Handy for *"derive colors from my brand hex, but override the company name and footer"*:
+
+```json
+{
+  "markdown": "# Report",
+  "accent_color": "#0E7490",
+  "branding": {
+    "company_name": "Acme Corp",
+    "company_url": "https://acme.com",
+    "footer_subtitle": "Q2 2026 Results"
+  }
+}
+```
 
 ### Custom branding
 
@@ -146,19 +174,21 @@ Pass a `branding` object to override any visual property. Omitted fields use Ope
 
 #### Color map (defaults)
 
+Defaults match the **OpenDocs house style** — a deep Purple-950 accent (`#2E1C5C`) with Purple-50/200 tints for a "wash of brand color" feel. The accent is intentionally dark so long-form output reads as ink rather than UI.
+
 | Property | Default | Controls |
 |----------|---------|----------|
-| `heading_color` | `#7F56D9` | H1-H4 heading text |
+| `heading_color` | `#2E1C5C` | H1-H4 heading text |
 | `body_color` | `#171717` | Body text, lists, code text, table cells |
 | `metadata_color` | `#737373` | Metadata lines at document top |
-| `link_color` | `#7F56D9` | Hyperlink text |
-| `table_header_bg` | `#7F56D9` | Table header row background |
+| `link_color` | `#2E1C5C` | Hyperlink text |
+| `table_header_bg` | `#2E1C5C` | Table header row background |
 | `table_header_fg` | `#FFFFFF` | Table header row text |
-| `alt_row_bg` | `#FAFAFA` | Alternating table row shading |
+| `alt_row_bg` | `#F9F5FF` | Alternating table row shading |
 | `border_color` | `#E5E5E5` | Table borders, horizontal rules |
-| `code_bg` | `#FAFAFA` | Code block background |
-| `code_border` | `#E5E5E5` | Code block border |
-| `footer_bold_color` | `#7F56D9` | Company name in footer |
+| `code_bg` | `#F9F5FF` | Code block background |
+| `code_border` | `#E9D7FE` | Code block border |
+| `footer_bold_color` | `#2E1C5C` | Company name in footer |
 | `footer_normal_color` | `#737373` | Footer subtitle and URL |
 
 #### Font and identity fields
@@ -171,7 +201,72 @@ Pass a `branding` object to override any visual property. Omitted fields use Ope
 | `company_url` | `https://opendocs.cc` | Footer link target |
 | `company_url_label` | `opendocs.cc` | Footer link display text |
 | `footer_subtitle` | `Made with OpenDocs.cc` | Footer second line |
-| `logo_url` | `null` | Header logo URL (falls back to bundled OpenDocs logo) |
+| `logo_url` | `null` | Header logo. Three modes (see below) |
+
+#### `logo_url` modes
+
+| Value | Behavior | Typical plan |
+|-------|----------|--------------|
+| `null` (omitted) | No logo in the page header | Pro — unbranded document |
+| `"bundled:opendocs"` | Use the packaged OpenDocs logo shipped with the image | Free — OpenDocs branding is locked on |
+| `"https://..."` | Download the image at request time and embed it (PNG / JPG / GIF) | Pro — customer-supplied logo on Cloudflare / S3 / etc. |
+
+External URLs are fetched with a 10 s timeout and a descriptive `User-Agent`. If the download fails the document still renders — just without the logo.
+
+#### `font_main` options
+
+Four fonts are bundled in the Docker image and can be selected by name. Any other font name is accepted too, but if it isn't installed LibreOffice substitutes a similar face when producing PDF.
+
+| Name | Debian package | Character | Good for |
+|------|----------------|-----------|----------|
+| `Arial` *(default)* | `fonts-liberation` | Neutral, universal | Everything — the safe default |
+| `Inter` | `fonts-inter` | Modern geometric sans | Tech / SaaS reports, product docs |
+| `Lato` | `fonts-lato` | Warm humanist sans | Business prose, proposals |
+| `Vollkorn` | `fonts-vollkorn` | Editorial serif | Legal, finance, academic |
+
+```json
+{ "branding": { "font_main": "Vollkorn" } }
+```
+
+`font_code` stays `Courier New` by default — change it per-request if you want a different monospace for code blocks.
+
+## Pre-built themes
+
+The service ships with 10 tuned themes in `app/themes.py`. Each theme is a full `BrandingConfig` — accent color, tinted alt-row / code backgrounds, fictional company identity, and footer subtitle — so you can preview the same content under different personas.
+
+| Theme | Accent | Example identity |
+|-------|--------|------------------|
+| `opendocs` | `#2E1C5C` Deep purple | OpenDocs *(Free-plan default — bundled logo + "Made with OpenDocs.cc" footer are locked on)* |
+| `charcoal` | `#1D2939` Slate | Greystone Consulting |
+| `green` | `#054F31` Forest | Verdant Analytics |
+| `blue` | `#194185` Royal | Northwave Systems |
+| `indigo` | `#2D3282` Midnight | Helios Capital |
+| `violet` | `#3E1C96` Imperial | Prism Research |
+| `fuchsia` | `#6F1574` Berry | Bloom Health |
+| `red` | `#7A271A` Crimson | Ember Security |
+| `orange` | `#772917` Mahogany | Forge Industrial |
+| `navy` | `#14306E` Oxford navy | Atlas Advisory — the "safe" blue for legal / finance / government |
+
+All accents are drawn from the **800/900-weight** of their hue family (custom "950" for the OpenDocs purple), paired with 50/200 tints for alt-row and code surfaces. The deeper weight keeps long-form reading calm — vibrant 500–700 shades read as UI, a 900 reads as ink.
+
+Two helpers in `app/themes.py` wire the themes into plan-aware defaults:
+
+```python
+from app.themes import free_plan_brand, pro_plan_brand
+
+# Free plan — OpenDocs logo + footer are non-negotiable
+brand = free_plan_brand()
+
+# Pro plan — start from a theme, layer overrides on top
+brand = pro_plan_brand(
+    "indigo",
+    company_name="Acme Corp",
+    company_url="https://acme.com",
+    logo_url="https://acme.com/logo.png",
+)
+```
+
+`pro_plan_brand()` strips the bundled OpenDocs logo by default, so Pro users are never silently branded as OpenDocs. Pass `logo_url=None` to ship without a logo, or `logo_url="https://..."` to embed a customer logo at request time.
 
 ## Concurrency
 

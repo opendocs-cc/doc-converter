@@ -6,12 +6,18 @@ FROM python:3.12-slim
 #   fonts-liberation           : Arial / Helvetica / Times metrics match —
 #                                no line-break drift when Arial is absent
 #   fonts-dejavu               : broad Unicode fallback coverage
+#   fonts-inter, fonts-lato,   : curated Google Font alternatives exposed
+#   fonts-vollkorn               via BrandingConfig.font_main
+#                                (modern sans / warm sans / editorial serif)
 #   tini                       : proper PID 1, reaps LibreOffice subprocesses
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
         libreoffice-calc \
         fonts-liberation \
         fonts-dejavu \
+        fonts-inter \
+        fonts-lato \
+        fonts-vollkorn \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
