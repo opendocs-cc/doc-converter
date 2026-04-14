@@ -1,0 +1,44 @@
+# Python bytecode
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv
+venv
+env
+
+# Test / coverage
+.pytest_cache
+.coverage
+htmlcov
+
+# Env files
+.env
+.env.*
+
+# Git / OS / editor
+.git
+.gitignore
+.gitattributes
+.github
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*.swo
+
+# Project-only files that don't belong in the image
+SKILL.md
+README.md
+SETUP.md
+theme.md
+test_convert.py
+testing-docs
+assets/logo-old.png
+
+# The image doesn't need its own Dockerfile baked in
+Dockerfile
+.dockerignore
