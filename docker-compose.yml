@@ -1,0 +1,29 @@
+# Standalone compose for the doc-converter box (Vultr Box B).
+#
+# The converter runs on its own VPS, separate from the main OpenDocs stack.
+# The main API box (Box A) reaches this service over Vultr's private network
+# via `DOC_CONVERTER_URL=http://<Box B private IP>:8080`.
+#
+# Public access is blocked by the Vultr cloud firewall: allow inbound :8080
+# only from Box A's private IP. See opendocs/deploy/SETUP.md for the full
+# provisioning checklist.
+
+services:
+  converter:
+    build: .
+    restart: unless-stopped
+    ports:
+      # Bound to all interfaces; the Vultr firewall restricts inbound traffic
+      # to Box A's private IP. Binding to a specific interface would hard-code
+      # the VPS private IP into this file, which is fragile across rebuilds.
+      - "8080:8080"
+    environment:
+      # Tuned to vCPU count — roughly 1.5x is a good starting point. Override
+      # via .env to scale with the box. See .env.example for the sizing guide.
+      - CONVERT_MAX_WORKERS=${CONVERT_MAX_WORKERS:-6}
+    deploy:
+      resources:
+        limits:
+          # Leave ~1 GB for host OS overhead. Default assumes the 8 GB baseline;
+          # override via .env when resizing the box (e.g. 3G on a 4 GB box).
+          memory: ${MEMORY_LIMIT:-7G}
