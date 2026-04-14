@@ -139,11 +139,36 @@ server {
 
 ## 7. Internal-only access (recommended for production)
 
-In production, the converter should only be accessible from your API server — not from the public internet. If both services are on the same VPS or Vultr VPC:
+In production the converter should only be reachable from your API server — never from the public internet. Two topologies; pick the one that matches your setup.
 
-### Same VPS
+### The mental model
 
-Bind to localhost only instead of all interfaces:
+```
+                 Public internet
+                       │
+                       ▼
+           ┌───────────────────────────┐
+           │ API server                │  Public IP:  45.x.x.x
+           │ api.opendocs.cc           │  Private IP: 10.0.0.10
+           │ (Next.js / FastAPI / ...) │
+           └──────────┬────────────────┘
+                      │ HTTP over private network
+                      ▼
+           ┌───────────────────────────┐
+           │ Converter server          │  No public IP (or firewalled)
+           │ (this Dockerfile)         │  Private IP: 10.0.0.20
+           │ Port 8080                 │
+           └───────────────────────────┘
+                      ▲
+                      │ Both servers in the same
+                      │ Vultr VPC ("VPC 2.0")
+```
+
+The converter listens on a **private-only** address. Your API calls it. No TLS, no auth middleware, no public exposure — the network itself is the boundary.
+
+### Option A — Same VPS (API and converter on one box)
+
+Bind to loopback only:
 
 ```bash
 docker run -d \
@@ -154,26 +179,79 @@ docker run -d \
   opendocs-converter
 ```
 
-Your API server calls `http://localhost:8080/convert/docx` directly. No reverse proxy needed.
+Your API calls `http://localhost:8080/convert/docx` directly. Nothing outside the box can reach the converter — the OS network stack enforces it.
 
-### Separate VPS on Vultr VPC
+### Option B — Separate VPS on a Vultr VPC (the pattern in the diagram)
 
-Bind to the private network IP:
+There are three moving pieces.
+
+**1. Provision a VPC in the Vultr console.**
+A VPC is a private L2 network that only your own servers see. You create one in the Vultr "VPC 2.0" section, then attach each server to it. Each server gets a second NIC with a `10.x.x.x` address that is not routable from the internet.
+
+**2. Bind the container to the private NIC only.**
 
 ```bash
-# Find your private IP
-ip addr show | grep "10\."
+# On the converter box, find the VPC IP
+ip -4 addr show | grep "inet 10\."
+# e.g. inet 10.0.0.20/20  ...
 
-# Bind to private IP only
 docker run -d \
   --name opendocs-converter \
   --restart unless-stopped \
-  -p 10.x.x.x:8080:8080 \
+  -p 10.0.0.20:8080:8080 \
   -e CONVERT_MAX_WORKERS=6 \
   opendocs-converter
 ```
 
-Your API server calls `http://10.x.x.x:8080/convert/docx` over the private network. Block port 8080 in your Vultr firewall group so it's not exposed publicly.
+The `-p 10.0.0.20:8080:8080` tells Docker to publish port 8080 only on the private NIC. The public NIC has nothing listening on 8080. Add a Vultr firewall rule denying inbound 8080 on the public interface as belt-and-suspenders.
+
+**3. Reach it from your API.** You have two options for the URL the API uses.
+
+| Approach | Setup | URL your API calls |
+|---|---|---|
+| **Private IP directly** | Nothing — just hardcode the `10.x.x.x` address (or put it in `DOC_CONVERTER_URL` env var). | `http://10.0.0.20:8080` |
+| **Internal DNS subdomain** | Add an A-record: `convert.internal.opendocs.cc → 10.0.0.20`. DNS resolution is public, but the returned IP only routes inside the VPC. | `http://convert.internal.opendocs.cc:8080` |
+
+The internal-DNS approach is cleaner — you can move the converter to a new box and just update the DNS record, no redeploy. An attacker can `dig` the record and see `10.0.0.20`, but they can't route there from outside the VPC.
+
+### Calling from your API
+
+```ts
+const CONVERTER_URL = process.env.DOC_CONVERTER_URL!
+// e.g. "http://convert.internal.opendocs.cc:8080"
+//  or  "http://10.0.0.20:8080"
+
+const res = await fetch(`${CONVERTER_URL}/convert/pdf`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    markdown,
+    filename: "report",
+    branding,
+  }),
+})
+if (!res.ok) throw new Error(`converter ${res.status}: ${await res.text()}`)
+const pdf = Buffer.from(await res.arrayBuffer())
+```
+
+No TLS, no bearer tokens, no signing — traffic never leaves the VPC.
+
+### If you later want HTTPS
+
+Sometimes compliance or defense-in-depth demands TLS even on private networks. Let's Encrypt's **HTTP-01 challenge won't work** because it can't reach a private IP. Use **DNS-01** instead — Caddy does this with one config block when your DNS is on a supported provider (Cloudflare, Route 53, etc.):
+
+```caddy
+convert.internal.opendocs.cc {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+    reverse_proxy localhost:8080
+}
+```
+
+Caddy will issue and renew the cert entirely through DNS. Your API then calls `https://convert.internal.opendocs.cc` — fully encrypted, private-only.
+
+Until you actually need this, plain HTTP over the VPC is fine. Vultr's VPC is isolated at the hypervisor level; adding TLS on top has real handshake-latency cost and doesn't change the threat model meaningfully.
 
 ## 8. Updating
 
