@@ -17,7 +17,7 @@ services:
       # Bound to all interfaces; the Vultr firewall restricts inbound traffic
       # to Box A's private IP. Binding to a specific interface would hard-code
       # the VPS private IP into this file, which is fragile across rebuilds.
-      - "8080:8080"
+      - "${VPC_BIND_IP:-10.8.96.3}:8080:8080"
     environment:
       # Tuned to vCPU count — roughly 1.5x is a good starting point. Override
       # via .env to scale with the box. See .env.example for the sizing guide.
