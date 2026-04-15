@@ -43,54 +43,55 @@ git clone git@github.com:your-org/doc-converter.git
 cd doc-converter
 ```
 
-## 2. Build the Docker image
+## 2. Configure environment
+
+The service is deployed with Docker Compose. Config comes from a `.env` file in the repo root — Compose auto-loads it.
 
 ```bash
-docker build -t opendocs-converter .
+cp .env.example .env
 ```
 
-This installs Python 3.12, LibreOffice Writer (for DOCX → PDF conversion), and all Python packages. The image is roughly 800 MB - 1 GB due to LibreOffice.
+Open `.env` and set the three values for your box:
 
-The first build takes 3-5 minutes on a typical VPS. Subsequent rebuilds are faster thanks to Docker layer caching — the LibreOffice and `requirements.txt` layers are cached unless you change them.
-
-## 3. Run the container
-
-```bash
-docker run -d \
-  --name opendocs-converter \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -e CONVERT_MAX_WORKERS=6 \
-  opendocs-converter
-```
-
-### Environment variables
-
-| Variable              | Default | Description                                                                                            |
-| --------------------- | ------- | ------------------------------------------------------------------------------------------------------ |
-| `CONVERT_MAX_WORKERS` | `6`     | Max concurrent conversions. Set based on your CPU count — roughly 1.5x vCPUs is a good starting point. |
+| Variable              | Default     | What to set                                                                                                               |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `CONVERT_MAX_WORKERS` | `3`         | Max concurrent conversions. Roughly `1.5 × vCPUs` — see the sizing guide below.                                           |
+| `MEMORY_LIMIT`        | `3G`        | Hard cap on the container. Leave ~1 GB for host OS overhead. LibreOffice peaks at 100–300 MB per PDF conversion.          |
+| `VPC_BIND_IP`         | `10.8.96.3` | The interface the container publishes `:8080` on. Set to the box's VPC IP (private-only), or `127.0.0.1` for same-host API. |
 
 ### Sizing guide
 
-| VPS spec      | Recommended workers | DOCX throughput | PDF throughput |
-| ------------- | ------------------- | --------------- | -------------- |
-| 1 vCPU / 2 GB | 2                   | ~30/min         | ~10/min        |
-| 2 vCPU / 4 GB | 3                   | ~60/min         | ~20/min        |
-| 4 vCPU / 8 GB | 6                   | ~100/min        | ~40/min        |
+| VPS spec        | `CONVERT_MAX_WORKERS` | `MEMORY_LIMIT` | DOCX/min | PDF/min |
+| --------------- | --------------------- | -------------- | -------- | ------- |
+| 1 vCPU /  2 GB  | 2                     | `1500M`        | ~30      | ~10     |
+| 2 vCPU /  4 GB  | 3                     | `3G`           | ~60      | ~20     |
+| 4 vCPU /  8 GB  | 6                     | `7G`           | ~100     | ~40     |
+| 8 vCPU / 16 GB  | 12                    | `15G`          | ~200     | ~80     |
 
 PDF is slower than DOCX because each PDF conversion spawns a LibreOffice process to print the Word document. This is the tradeoff for 100% visual consistency between formats.
+
+## 3. Build and start the service
+
+```bash
+docker compose up -d --build
+```
+
+Compose builds the image (Python 3.12 + LibreOffice + fonts; roughly 800 MB–1 GB) and starts the container detached. The first build takes 3–5 minutes on a typical VPS; subsequent builds hit the cached LibreOffice and `requirements.txt` layers unless `Dockerfile` or `requirements.txt` changes.
 
 ## 4. Verify it's running
 
 ```bash
 # Check container status
-docker ps
+docker compose ps
 
 # Check logs
-docker logs opendocs-converter
+docker compose logs
 
-# Hit the health endpoint
-curl http://localhost:8080/health
+# Hit the health endpoint on the bound interface (matches VPC_BIND_IP)
+curl http://$(grep ^VPC_BIND_IP .env | cut -d= -f2 | tr -d '"'):8080/health
+
+# …or from inside the container (always works regardless of VPC_BIND_IP)
+docker compose exec converter wget -qO- http://localhost:8080/health
 ```
 
 Expected response:
@@ -101,15 +102,17 @@ Expected response:
 
 ## 5. Test a conversion
 
+Run from the converter box. Substitute `$VPC_BIND_IP` with the value you set in `.env` (or use `127.0.0.1` if you bound to loopback).
+
 ```bash
 # DOCX
-curl -X POST http://localhost:8080/convert/docx \
+curl -X POST http://$VPC_BIND_IP:8080/convert/docx \
   -H "Content-Type: application/json" \
   -d '{"markdown": "# Test Document\n\nThis is a test paragraph.\n\n| Col A | Col B |\n|-------|-------|\n| 1 | 2 |", "filename": "test"}' \
   -o test.docx
 
 # PDF (goes through DOCX first, then LibreOffice prints to PDF)
-curl -X POST http://localhost:8080/convert/pdf \
+curl -X POST http://$VPC_BIND_IP:8080/convert/pdf \
   -H "Content-Type: application/json" \
   -d '{"markdown": "# Test Document\n\nThis is a test paragraph.", "filename": "test"}' \
   -o test.pdf
@@ -187,17 +190,20 @@ In production the converter should only be reachable from your API server — ne
 
 The converter listens on a **private-only** address. Your API calls it. No TLS, no auth middleware, no public exposure — the network itself is the boundary.
 
+Both options are driven by the same knob — `VPC_BIND_IP` in `.env`. Set it, then `docker compose up -d` to apply.
+
 ### Option A — Same VPS (API and converter on one box)
 
-Bind to loopback only:
+Bind to loopback only. In `.env`:
+
+```
+VPC_BIND_IP=127.0.0.1
+```
+
+Then:
 
 ```bash
-docker run -d \
-  --name opendocs-converter \
-  --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
-  -e CONVERT_MAX_WORKERS=6 \
-  opendocs-converter
+docker compose up -d
 ```
 
 Your API calls `http://localhost:8080/convert/docx` directly. Nothing outside the box can reach the converter — the OS network stack enforces it.
@@ -215,16 +221,21 @@ A VPC is a private L2 network that only your own servers see. You create one in 
 # On the converter box, find the VPC IP
 ip -4 addr show | grep "inet 10\."
 # e.g. inet 10.0.0.20/20  ...
-
-docker run -d \
-  --name opendocs-converter \
-  --restart unless-stopped \
-  -p 10.0.0.20:8080:8080 \
-  -e CONVERT_MAX_WORKERS=6 \
-  opendocs-converter
 ```
 
-The `-p 10.0.0.20:8080:8080` tells Docker to publish port 8080 only on the private NIC. The public NIC has nothing listening on 8080. Add a Vultr firewall rule denying inbound 8080 on the public interface as belt-and-suspenders.
+Put that IP in `.env`:
+
+```
+VPC_BIND_IP=10.0.0.20
+```
+
+Then:
+
+```bash
+docker compose up -d
+```
+
+The compose file publishes port 8080 only on the private NIC (`${VPC_BIND_IP}:8080:8080`). The public NIC has nothing listening on 8080. Add a Vultr firewall rule denying inbound 8080 on the public interface as belt-and-suspenders.
 
 **3. Reach it from your API.** You have two options for the URL the API uses.
 
@@ -281,24 +292,10 @@ When you push code changes:
 ```bash
 cd doc-converter
 git pull
-
-# Rebuild and restart
-docker build -t opendocs-converter .
-docker stop opendocs-converter
-docker rm opendocs-converter
-docker run -d \
-  --name opendocs-converter \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -e CONVERT_MAX_WORKERS=6 \
-  opendocs-converter
+docker compose up -d --build
 ```
 
-Or as a one-liner:
-
-```bash
-git pull && docker build -t opendocs-converter . && docker stop opendocs-converter && docker rm opendocs-converter && docker run -d --name opendocs-converter --restart unless-stopped -p 8080:8080 -e CONVERT_MAX_WORKERS=6 opendocs-converter
-```
+Compose rebuilds only the layers that changed and recreates the container with the new image in one step. Config from `.env` and the `restart: unless-stopped` policy carry over automatically — no need to re-pass flags.
 
 ## 9. Monitoring
 
@@ -306,10 +303,10 @@ git pull && docker build -t opendocs-converter . && docker stop opendocs-convert
 
 ```bash
 # Follow logs in real time
-docker logs -f opendocs-converter
+docker compose logs -f
 
 # Last 100 lines
-docker logs --tail 100 opendocs-converter
+docker compose logs --tail 100
 ```
 
 ### Resource usage
@@ -321,7 +318,7 @@ docker stats opendocs-converter
 
 ### Restart on crash
 
-The `--restart unless-stopped` flag handles this. Docker will restart the container automatically if it crashes. It won't restart if you explicitly stop it with `docker stop`.
+The `restart: unless-stopped` policy in `docker-compose.yml` handles this. Docker will restart the container automatically if it crashes. It won't restart if you explicitly `docker compose stop`.
 
 ## Troubleshooting
 
@@ -330,7 +327,7 @@ The `--restart unless-stopped` flag handles this. Docker will restart the contai
 SSH into the container and test manually:
 
 ```bash
-docker exec -it opendocs-converter bash
+docker compose exec converter bash
 
 # Create a test DOCX
 python -c "
@@ -355,18 +352,14 @@ killall -9 soffice.bin 2>/dev/null
 
 ### Out of memory on large documents
 
-LibreOffice uses more memory than the DOCX converter alone. Each PDF conversion can peak at 100-300 MB. Reduce `CONVERT_MAX_WORKERS` to limit how many run simultaneously:
+LibreOffice uses more memory than the DOCX converter alone. Each PDF conversion can peak at 100-300 MB. Drop `CONVERT_MAX_WORKERS` (and optionally raise `MEMORY_LIMIT`) in `.env`, then redeploy:
 
 ```bash
-# Restart with fewer workers
-docker stop opendocs-converter && docker rm opendocs-converter
-docker run -d \
-  --name opendocs-converter \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -e CONVERT_MAX_WORKERS=3 \
-  opendocs-converter
+# Edit .env — e.g. CONVERT_MAX_WORKERS=3
+docker compose up -d
 ```
+
+Compose detects the env change and recreates the container with the new limits.
 
 ### PDF conversions are slow
 
@@ -376,4 +369,4 @@ If you need higher PDF throughput, scale horizontally by running multiple conver
 
 ### Connection refused from API server
 
-Check that the converter is bound to the right interface. `docker ps` shows the port mapping. If using VPC, verify both servers are in the same Vultr VPC and the private IP is reachable.
+Check that the converter is bound to the right interface. `docker compose ps` shows the port mapping — the left side should match `VPC_BIND_IP` in `.env`. If using VPC, verify both servers are in the same Vultr VPC and the private IP is reachable (e.g. `ping 10.0.0.20` from the API box).
