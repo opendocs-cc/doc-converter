@@ -8,17 +8,38 @@ Step-by-step instructions for deploying the OpenDocs Document Converter on a VPS
 - At least 4 GB RAM (LibreOffice needs memory for PDF conversions)
 - The converter source code on the server
 
+SSH into your fresh Ubuntu instance:
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Enable automatic security updates
+sudo apt install -y unattended-upgrades
+sudo dpkg-reconfigure -plow unattended-upgrades
+```
+
+```bash
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+
+# Add your user to the docker group (log out and back in after)
+sudo usermod -aG docker $USER
+
+# Install Docker Compose plugin
+sudo apt install -y docker-compose-plugin
+
+# Verify
+docker --version
+docker compose version
+```
+
 ## 1. Get the code onto your server
 
 ```bash
 # Option A: Clone from your private repo
 ssh your-server
 git clone git@github.com:your-org/doc-converter.git
-cd doc-converter
-
-# Option B: Copy from your local machine
-scp -r ./doc-converter user@your-server:~/doc-converter
-ssh your-server
 cd doc-converter
 ```
 
@@ -45,17 +66,17 @@ docker run -d \
 
 ### Environment variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CONVERT_MAX_WORKERS` | `6` | Max concurrent conversions. Set based on your CPU count — roughly 1.5x vCPUs is a good starting point. |
+| Variable              | Default | Description                                                                                            |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------ |
+| `CONVERT_MAX_WORKERS` | `6`     | Max concurrent conversions. Set based on your CPU count — roughly 1.5x vCPUs is a good starting point. |
 
 ### Sizing guide
 
-| VPS spec | Recommended workers | DOCX throughput | PDF throughput |
-|----------|--------------------|-----------------|--------------------|
-| 1 vCPU / 2 GB | 2 | ~30/min | ~10/min |
-| 2 vCPU / 4 GB | 3 | ~60/min | ~20/min |
-| 4 vCPU / 8 GB | 6 | ~100/min | ~40/min |
+| VPS spec      | Recommended workers | DOCX throughput | PDF throughput |
+| ------------- | ------------------- | --------------- | -------------- |
+| 1 vCPU / 2 GB | 2                   | ~30/min         | ~10/min        |
+| 2 vCPU / 4 GB | 3                   | ~60/min         | ~20/min        |
+| 4 vCPU / 8 GB | 6                   | ~100/min        | ~40/min        |
 
 PDF is slower than DOCX because each PDF conversion spawns a LibreOffice process to print the Word document. This is the tradeoff for 100% visual consistency between formats.
 
@@ -75,7 +96,7 @@ curl http://localhost:8080/health
 Expected response:
 
 ```json
-{"status": "ok", "version": "0.1.0", "max_workers": 6}
+{ "status": "ok", "version": "0.1.0", "max_workers": 6 }
 ```
 
 ## 5. Test a conversion
@@ -207,9 +228,9 @@ The `-p 10.0.0.20:8080:8080` tells Docker to publish port 8080 only on the priva
 
 **3. Reach it from your API.** You have two options for the URL the API uses.
 
-| Approach | Setup | URL your API calls |
-|---|---|---|
-| **Private IP directly** | Nothing — just hardcode the `10.x.x.x` address (or put it in `DOC_CONVERTER_URL` env var). | `http://10.0.0.20:8080` |
+| Approach                   | Setup                                                                                                                                  | URL your API calls                         |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| **Private IP directly**    | Nothing — just hardcode the `10.x.x.x` address (or put it in `DOC_CONVERTER_URL` env var).                                             | `http://10.0.0.20:8080`                    |
 | **Internal DNS subdomain** | Add an A-record: `convert.internal.opendocs.cc → 10.0.0.20`. DNS resolution is public, but the returned IP only routes inside the VPC. | `http://convert.internal.opendocs.cc:8080` |
 
 The internal-DNS approach is cleaner — you can move the converter to a new box and just update the DNS record, no redeploy. An attacker can `dig` the record and see `10.0.0.20`, but they can't route there from outside the VPC.
@@ -217,7 +238,7 @@ The internal-DNS approach is cleaner — you can move the converter to a new box
 ### Calling from your API
 
 ```ts
-const CONVERTER_URL = process.env.DOC_CONVERTER_URL!
+const CONVERTER_URL = process.env.DOC_CONVERTER_URL!;
 // e.g. "http://convert.internal.opendocs.cc:8080"
 //  or  "http://10.0.0.20:8080"
 
@@ -229,9 +250,9 @@ const res = await fetch(`${CONVERTER_URL}/convert/pdf`, {
     filename: "report",
     branding,
   }),
-})
-if (!res.ok) throw new Error(`converter ${res.status}: ${await res.text()}`)
-const pdf = Buffer.from(await res.arrayBuffer())
+});
+if (!res.ok) throw new Error(`converter ${res.status}: ${await res.text()}`);
+const pdf = Buffer.from(await res.arrayBuffer());
 ```
 
 No TLS, no bearer tokens, no signing — traffic never leaves the VPC.

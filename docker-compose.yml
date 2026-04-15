@@ -11,6 +11,7 @@
 services:
   converter:
     build: .
+    container_name: opendocs-converter
     restart: unless-stopped
     ports:
       # Bound to all interfaces; the Vultr firewall restricts inbound traffic
@@ -21,6 +22,7 @@ services:
       # Tuned to vCPU count — roughly 1.5x is a good starting point. Override
       # via .env to scale with the box. See .env.example for the sizing guide.
       - CONVERT_MAX_WORKERS=${CONVERT_MAX_WORKERS:-6}
+    mem_limit: ${MEMORY_LIMIT:-3G}
     deploy:
       resources:
         limits:
