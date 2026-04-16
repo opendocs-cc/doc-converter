@@ -108,7 +108,7 @@ class BrandingConfig(BaseModel):
         description="Display text for the footer URL",
     )
     footer_subtitle: str | None = Field(
-        default="Made with OpenDocs.cc",
+        default="Made with OpenDocs",
         description=(
             "Second line in footer (below the company name).  Set to None "
             "to hide the subtitle.  The full footer is suppressed only when "
