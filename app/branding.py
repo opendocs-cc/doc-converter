@@ -82,11 +82,12 @@ class BrandingConfig(BaseModel):
         default="Arial",
         description=(
             "Primary font for all non-code text.  Curated options bundled "
-            "in the Docker image: 'Arial' (default), 'Inter' (modern sans), "
-            "'Lato' (warm humanist sans), 'Vollkorn' (editorial serif).  "
-            "Any font name may be passed; if the font is not installed on "
-            "the rendering box, LibreOffice substitutes a similar one when "
-            "producing PDF."
+            "in the Docker image: 'Arial' (default), 'Inter' (modern "
+            "geometric sans), 'IBM Plex Sans' (corporate tech sans), "
+            "'Lato' (warm humanist sans), 'Merriweather' (screen-optimized "
+            "serif), 'Vollkorn' (editorial serif).  Any font name may be "
+            "passed; if the font is not installed on the rendering box, "
+            "LibreOffice substitutes a similar one when producing PDF."
         ),
     )
     font_code: str = Field(

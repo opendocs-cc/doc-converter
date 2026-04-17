@@ -135,7 +135,14 @@ class HealthResponse(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/healthz", response_model=HealthResponse)
+async def healthz():
+    return HealthResponse(max_workers=MAX_WORKERS)
+
+
+# Backwards-compatible alias — Docker healthchecks and existing monitors still
+# point at /health. Both endpoints return the same response.
+@app.get("/health", response_model=HealthResponse, include_in_schema=False)
 async def health():
     return HealthResponse(max_workers=MAX_WORKERS)
 

@@ -6,9 +6,13 @@ FROM python:3.12-slim
 #   fonts-liberation           : Arial / Helvetica / Times metrics match —
 #                                no line-break drift when Arial is absent
 #   fonts-dejavu               : broad Unicode fallback coverage
-#   fonts-inter, fonts-lato,   : curated Google Font alternatives exposed
-#   fonts-vollkorn               via BrandingConfig.font_main
-#                                (modern sans / warm sans / editorial serif)
+#   fonts-inter, fonts-ibm-plex, : curated Google Fonts exposed via
+#   fonts-lato, fonts-merriweather, BrandingConfig.font_main — mixture of
+#   fonts-vollkorn               three sans (geometric / corporate / warm)
+#                                and two serifs (screen-optimized /
+#                                editorial). Keep this list in sync with
+#                                packages/shared/src/workspaces/validation.ts
+#                                (EXPORT_FONTS) in the main repo.
 #   tini                       : proper PID 1, reaps LibreOffice subprocesses
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
@@ -16,7 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-liberation \
         fonts-dejavu \
         fonts-inter \
+        fonts-ibm-plex \
         fonts-lato \
+        fonts-merriweather \
         fonts-vollkorn \
         tini \
     && rm -rf /var/lib/apt/lists/*
@@ -44,7 +50,7 @@ EXPOSE 8080
 # Health probe — orchestrators and `docker inspect` will see container health
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request,sys; \
-sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=5).status == 200 else 1)" \
+sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz', timeout=5).status == 200 else 1)" \
     || exit 1
 
 # tini wraps uvicorn so signals and subprocesses behave.
