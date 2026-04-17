@@ -7,14 +7,23 @@ FROM python:3.12-slim
 #                                no line-break drift when Arial is absent
 #   fonts-dejavu               : broad Unicode fallback coverage
 #   fonts-inter, fonts-ibm-plex, : curated Google Fonts exposed via
-#   fonts-lato, fonts-merriweather, BrandingConfig.font_main — mixture of
-#   fonts-vollkorn               three sans (geometric / corporate / warm)
-#                                and two serifs (screen-optimized /
-#                                editorial). Keep this list in sync with
+#   fonts-lato, fonts-vollkorn   BrandingConfig.font_main — mixture of
+#                                three sans (geometric / corporate / warm)
+#                                and one serif (editorial). Merriweather
+#                                (the second serif) is fetched directly from
+#                                google/fonts because Debian doesn't ship it.
+#                                Keep this list in sync with
 #                                packages/shared/src/workspaces/validation.ts
 #                                (EXPORT_FONTS) in the main repo.
 #   tini                       : proper PID 1, reaps LibreOffice subprocesses
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# Notes:
+#   - fonts-ibm-plex lives in `contrib`, not `main`, on Debian trixie — we
+#     enable contrib here so the package resolves.
+#   - curl/ca-certificates are needed only to fetch Merriweather; we purge
+#     curl at the end of the RUN to keep the image lean.
+RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
         libreoffice-calc \
         fonts-liberation \
@@ -22,9 +31,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-inter \
         fonts-ibm-plex \
         fonts-lato \
-        fonts-merriweather \
         fonts-vollkorn \
+        fontconfig \
+        ca-certificates \
+        curl \
         tini \
+    && mkdir -p /usr/share/fonts/truetype/merriweather \
+    && curl -fsSL -o /usr/share/fonts/truetype/merriweather/Merriweather.ttf \
+        "https://github.com/google/fonts/raw/main/ofl/merriweather/Merriweather%5Bopsz%2Cwdth%2Cwght%5D.ttf" \
+    && curl -fsSL -o /usr/share/fonts/truetype/merriweather/Merriweather-Italic.ttf \
+        "https://github.com/google/fonts/raw/main/ofl/merriweather/Merriweather-Italic%5Bopsz%2Cwdth%2Cwght%5D.ttf" \
+    && fc-cache -f \
+    && apt-get purge -y --auto-remove curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Run as a non-root user in production
