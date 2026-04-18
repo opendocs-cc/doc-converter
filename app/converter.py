@@ -306,6 +306,149 @@ def _add_header(doc: Document, logo_path: str):
         run.add_picture(logo_path, width=Inches(0.46), height=Inches(0.46))
 
 
+# ---------------------------------------------------------------------------
+# Inline image download
+# ---------------------------------------------------------------------------
+#
+# Inline body images (Markdown `![alt](url)`) are downloaded at conversion
+# time and embedded into the DOCX via python-docx's `add_picture`. Downloads
+# are hard-capped on size, time, and format so a single bad URL can never
+# take a worker down. Any failure falls back to a plain-text `[alt]`
+# placeholder so exports always complete.
+#
+# The API server now rehosts remote images to R2 at publish time
+# (`packages/shared/src/posts/image-rehost.ts`), so in the happy path the
+# URLs we see here point at `assets.opendocs.cc`. Legacy documents published
+# before that change — and any rehost that skipped a URL (oversize,
+# unsupported type, SSRF guard) — will still fetch the upstream origin.
+
+_INLINE_IMAGE_TIMEOUT = 15.0
+_INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_INLINE_IMAGE_CONTENT_WIDTH = Inches(5.5)
+
+
+def _image_src_from_token(tok) -> tuple[str, str]:
+    """Return ``(src, alt)`` from a markdown-it ``image`` token.
+
+    ``alt`` comes from the token's surface content (which markdown-it fills
+    from the bracketed portion of ``![...](...)``). ``src`` is read out of
+    the attrs mapping.
+    """
+    src = ""
+    for attr_name, attr_val in (tok.attrs or {}).items():
+        if attr_name == "src":
+            src = attr_val or ""
+            break
+    alt = tok.content or ""
+    return src, alt
+
+
+def _inline_is_image_only(inline_tok) -> tuple[Optional[str], Optional[str]]:
+    """Detect "standalone image" paragraphs.
+
+    A paragraph like ``![alt](url)`` parses to a single inline token whose
+    only meaningful child is an ``image``. If we detect that shape, the
+    caller renders the paragraph as an embedded picture instead of running
+    the inline text through ``_paragraph``. Paragraphs mixing an image with
+    other content fall through to the regular path (the image becomes a
+    ``[alt]`` text placeholder — acceptable for the rare mixed case).
+    """
+    if inline_tok is None or not inline_tok.children:
+        return None, None
+    image_tok = None
+    for child in inline_tok.children:
+        ctype = child.type
+        if ctype == "image":
+            if image_tok is not None:
+                return None, None  # multiple images — bail, render as text
+            image_tok = child
+        elif ctype in ("softbreak", "hardbreak"):
+            continue
+        elif ctype == "text" and not child.content.strip():
+            continue
+        else:
+            return None, None
+    if image_tok is None:
+        return None, None
+    src, alt = _image_src_from_token(image_tok)
+    if not src:
+        return None, None
+    return src, alt
+
+
+def _download_inline_image(url: str) -> Optional[str]:
+    """Download ``url`` to a temp file. Returns the path or ``None`` on
+    any failure (network error, non-2xx, size cap, unsupported type).
+
+    The caller owns the returned path and must ``os.unlink`` it after
+    ``add_picture`` has read the bytes. ``add_picture`` reads eagerly, so
+    the file can be removed before ``doc.save``.
+    """
+    try:
+        headers = {
+            # Some CDNs (Wikimedia in particular) reject the default httpx
+            # UA with a 403. Identify ourselves politely.
+            "User-Agent": "OpenDocs-Converter/0.1 (+https://opendocs.cc)",
+            "Accept": "image/*",
+        }
+        with httpx.stream(
+            "GET",
+            url,
+            timeout=_INLINE_IMAGE_TIMEOUT,
+            follow_redirects=True,
+            headers=headers,
+        ) as resp:
+            if resp.status_code >= 400:
+                return None
+
+            ctype = (resp.headers.get("content-type") or "").lower().split(";")[0].strip()
+            mime_ext = {
+                "image/jpeg": ".jpg",
+                "image/jpg": ".jpg",
+                "image/pjpeg": ".jpg",
+                "image/png": ".png",
+                "image/gif": ".gif",
+                "image/bmp": ".bmp",
+                "image/x-bmp": ".bmp",
+            }.get(ctype)
+            suffix = mime_ext
+            if not suffix:
+                # Fall back to the URL's path extension — some origins
+                # serve image/jpeg as `application/octet-stream`.
+                path_part = url.split("?", 1)[0].split("#", 1)[0].lower()
+                for ext in (".jpeg", ".jpg", ".png", ".gif", ".bmp"):
+                    if path_part.endswith(ext):
+                        suffix = ".jpg" if ext == ".jpeg" else ext
+                        break
+            if not suffix:
+                # SVG / WebP / TIFF / unknown — python-docx cannot embed
+                # these reliably across Word + LibreOffice. Fall back to
+                # the alt-text placeholder so the export still completes.
+                return None
+
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            total = 0
+            try:
+                for chunk in resp.iter_bytes():
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > _INLINE_IMAGE_MAX_BYTES:
+                        raise ValueError("image exceeds size cap")
+                    tmp.write(chunk)
+                tmp.close()
+                return tmp.name
+            except Exception:
+                tmp.close()
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+                return None
+    except Exception:
+        return None
+
+
 BUNDLED_LOGO_SENTINEL = "bundled:opendocs"
 
 
@@ -672,6 +815,44 @@ class DocxBuilder:
         _add_inline_runs(p, text, base_color=self._c_body,
                          base_font=self.brand.font_main, base_size=Pt(11))
         return p
+
+    def _image(self, src: str, alt: str):
+        """Embed a standalone image paragraph.
+
+        Falls back to an ``[alt]`` placeholder paragraph if the image can't
+        be fetched, decoded, or embedded — so a single broken URL never
+        aborts the export.
+        """
+        placeholder = f"[{alt}]" if alt else "[image]"
+        tmp_path: Optional[str] = None
+        tmp_is_owned = False
+        try:
+            if src.startswith(("http://", "https://")):
+                tmp_path = _download_inline_image(src)
+                tmp_is_owned = tmp_path is not None
+            elif os.path.isabs(src) and os.path.exists(src):
+                tmp_path = src
+            if tmp_path is None or not os.path.exists(tmp_path):
+                return self._paragraph(placeholder)
+
+            p = self.doc.add_paragraph(style="Normal")
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.add_run()
+            try:
+                run.add_picture(tmp_path, width=_INLINE_IMAGE_CONTENT_WIDTH)
+            except Exception:
+                # python-docx couldn't decode the payload (truncated, wrong
+                # magic bytes, unsupported format). Drop the empty paragraph
+                # and fall back to the text placeholder.
+                p._p.getparent().remove(p._p)
+                return self._paragraph(placeholder)
+            return p
+        finally:
+            if tmp_is_owned and tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def _metadata_line(self, text: str):
         p = self.doc.add_paragraph(style="Normal")
@@ -1124,8 +1305,16 @@ def convert_md_to_docx(
         elif tok.type == "paragraph_open":
             i += 1
             if i < len(tokens) and tokens[i].type == "inline":
-                text = (_extract_text_from_inline_tokens(tokens[i].children)
-                        if tokens[i].children else tokens[i].content)
+                inline_tok = tokens[i]
+                # Standalone image paragraph → embed as picture rather than
+                # rendering the alt text as a `[alt]` placeholder.
+                img_src, img_alt = _inline_is_image_only(inline_tok)
+                if img_src is not None:
+                    builder._image(img_src, img_alt or "")
+                    i += 2
+                    continue
+                text = (_extract_text_from_inline_tokens(inline_tok.children)
+                        if inline_tok.children else inline_tok.content)
                 # Skip already-processed metadata
                 if metadata_text and text.strip() == metadata_text.strip():
                     i += 2
