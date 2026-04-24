@@ -9,10 +9,13 @@ formula rendering ported from MiCA.
 from __future__ import annotations
 
 import io
+import ipaddress
 import os
 import re
+import socket
 import tempfile
 from typing import Optional
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from docx import Document
@@ -325,6 +328,50 @@ def _add_header(doc: Document, logo_path: str):
 _INLINE_IMAGE_TIMEOUT = 15.0
 _INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 _INLINE_IMAGE_CONTENT_WIDTH = Inches(5.5)
+_REMOTE_FETCH_MAX_REDIRECTS = 3
+_REMOTE_LOGO_MAX_BYTES = 5 * 1024 * 1024
+_BLOCKED_HOSTS = {
+    "localhost",
+    "ip6-localhost",
+    "ip6-loopback",
+    "0.0.0.0",
+    "broadcasthost",
+    "metadata.google.internal",
+    "metadata",
+}
+
+
+def _is_private_ip(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return True
+    return not ip.is_global
+
+
+def _is_blocked_host(host: str) -> bool:
+    lower = host.lower().strip("[]")
+    return (
+        lower in _BLOCKED_HOSTS
+        or lower.endswith(".local")
+        or lower.endswith(".internal")
+        or lower.endswith(".localhost")
+    )
+
+
+def _is_safe_remote_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    host = parsed.hostname
+    if _is_blocked_host(host):
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    addresses = {info[4][0] for info in infos}
+    return bool(addresses) and all(not _is_private_ip(addr) for addr in addresses)
 
 
 def _image_src_from_token(tok) -> tuple[str, str]:
@@ -391,60 +438,73 @@ def _download_inline_image(url: str) -> Optional[str]:
             "User-Agent": "OpenDocs-Converter/0.1 (+https://opendocs.cc)",
             "Accept": "image/*",
         }
-        with httpx.stream(
-            "GET",
-            url,
-            timeout=_INLINE_IMAGE_TIMEOUT,
-            follow_redirects=True,
-            headers=headers,
-        ) as resp:
-            if resp.status_code >= 400:
+        current_url = url
+        for _hop in range(_REMOTE_FETCH_MAX_REDIRECTS + 1):
+            if not _is_safe_remote_url(current_url):
                 return None
 
-            ctype = (resp.headers.get("content-type") or "").lower().split(";")[0].strip()
-            mime_ext = {
-                "image/jpeg": ".jpg",
-                "image/jpg": ".jpg",
-                "image/pjpeg": ".jpg",
-                "image/png": ".png",
-                "image/gif": ".gif",
-                "image/bmp": ".bmp",
-                "image/x-bmp": ".bmp",
-            }.get(ctype)
-            suffix = mime_ext
-            if not suffix:
-                # Fall back to the URL's path extension — some origins
-                # serve image/jpeg as `application/octet-stream`.
-                path_part = url.split("?", 1)[0].split("#", 1)[0].lower()
-                for ext in (".jpeg", ".jpg", ".png", ".gif", ".bmp"):
-                    if path_part.endswith(ext):
-                        suffix = ".jpg" if ext == ".jpeg" else ext
-                        break
-            if not suffix:
-                # SVG / WebP / TIFF / unknown — python-docx cannot embed
-                # these reliably across Word + LibreOffice. Fall back to
-                # the alt-text placeholder so the export still completes.
-                return None
+            with httpx.stream(
+                "GET",
+                current_url,
+                timeout=_INLINE_IMAGE_TIMEOUT,
+                follow_redirects=False,
+                headers=headers,
+            ) as resp:
+                if 300 <= resp.status_code < 400:
+                    location = resp.headers.get("location")
+                    if not location:
+                        return None
+                    current_url = urljoin(current_url, location)
+                    continue
 
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-            total = 0
-            try:
-                for chunk in resp.iter_bytes():
-                    if not chunk:
-                        continue
-                    total += len(chunk)
-                    if total > _INLINE_IMAGE_MAX_BYTES:
-                        raise ValueError("image exceeds size cap")
-                    tmp.write(chunk)
-                tmp.close()
-                return tmp.name
-            except Exception:
-                tmp.close()
+                if resp.status_code >= 400:
+                    return None
+
+                ctype = (resp.headers.get("content-type") or "").lower().split(";")[0].strip()
+                mime_ext = {
+                    "image/jpeg": ".jpg",
+                    "image/jpg": ".jpg",
+                    "image/pjpeg": ".jpg",
+                    "image/png": ".png",
+                    "image/gif": ".gif",
+                    "image/bmp": ".bmp",
+                    "image/x-bmp": ".bmp",
+                }.get(ctype)
+                suffix = mime_ext
+                if not suffix:
+                    # Fall back to the URL's path extension — some origins
+                    # serve image/jpeg as `application/octet-stream`.
+                    path_part = current_url.split("?", 1)[0].split("#", 1)[0].lower()
+                    for ext in (".jpeg", ".jpg", ".png", ".gif", ".bmp"):
+                        if path_part.endswith(ext):
+                            suffix = ".jpg" if ext == ".jpeg" else ext
+                            break
+                if not suffix:
+                    # SVG / WebP / TIFF / unknown — python-docx cannot embed
+                    # these reliably across Word + LibreOffice. Fall back to
+                    # the alt-text placeholder so the export still completes.
+                    return None
+
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                total = 0
                 try:
-                    os.unlink(tmp.name)
-                except OSError:
-                    pass
-                return None
+                    for chunk in resp.iter_bytes():
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > _INLINE_IMAGE_MAX_BYTES:
+                            raise ValueError("image exceeds size cap")
+                        tmp.write(chunk)
+                    tmp.close()
+                    return tmp.name
+                except Exception:
+                    tmp.close()
+                    try:
+                        os.unlink(tmp.name)
+                    except OSError:
+                        pass
+                    return None
+        return None
     except Exception:
         return None
 
@@ -489,23 +549,50 @@ def _resolve_logo(brand: BrandingConfig) -> tuple[Optional[str], bool]:
             headers = {
                 "User-Agent": "OpenDocs-Converter/0.1 (+https://opendocs.cc)",
             }
-            resp = httpx.get(
-                brand.logo_url,
-                timeout=10,
-                follow_redirects=True,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            ctype = resp.headers.get("content-type", "").lower()
-            suffix = ".png"
-            if "jpeg" in ctype or "jpg" in ctype or brand.logo_url.lower().endswith((".jpg", ".jpeg")):
-                suffix = ".jpg"
-            elif "gif" in ctype or brand.logo_url.lower().endswith(".gif"):
-                suffix = ".gif"
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-            tmp.write(resp.content)
-            tmp.close()
-            return tmp.name, True
+            current_url = brand.logo_url
+            for _hop in range(_REMOTE_FETCH_MAX_REDIRECTS + 1):
+                if not _is_safe_remote_url(current_url):
+                    return None, False
+                with httpx.stream(
+                    "GET",
+                    current_url,
+                    timeout=10,
+                    follow_redirects=False,
+                    headers=headers,
+                ) as resp:
+                    if 300 <= resp.status_code < 400:
+                        location = resp.headers.get("location")
+                        if not location:
+                            return None, False
+                        current_url = urljoin(current_url, location)
+                        continue
+                    resp.raise_for_status()
+                    ctype = resp.headers.get("content-type", "").lower()
+                    suffix = ".png"
+                    if "jpeg" in ctype or "jpg" in ctype or current_url.lower().endswith((".jpg", ".jpeg")):
+                        suffix = ".jpg"
+                    elif "gif" in ctype or current_url.lower().endswith(".gif"):
+                        suffix = ".gif"
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                    total = 0
+                    try:
+                        for chunk in resp.iter_bytes():
+                            if not chunk:
+                                continue
+                            total += len(chunk)
+                            if total > _REMOTE_LOGO_MAX_BYTES:
+                                raise ValueError("logo exceeds size cap")
+                            tmp.write(chunk)
+                        tmp.close()
+                        return tmp.name, True
+                    except Exception:
+                        tmp.close()
+                        try:
+                            os.unlink(tmp.name)
+                        except OSError:
+                            pass
+                        return None, False
+            return None, False
         except Exception:
             return None, False
 
