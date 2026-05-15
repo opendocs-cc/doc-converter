@@ -762,7 +762,7 @@ class DocxBuilder:
         sn.paragraph_format.space_after = Pt(12)
         sn.paragraph_format.line_spacing = 1.25
 
-        # Title (H1)
+        # Title (first document-level H1 only)
         st = styles["Title"]
         st.font.name = b.font_main
         st.font.size = Pt(18)
@@ -778,6 +778,18 @@ class DocxBuilder:
             f'<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
             f"</w:pBdr>"
         ))
+
+        # Heading 1 (body H1)
+        sh1 = styles["Heading 1"]
+        sh1.font.name = b.font_main
+        sh1.font.size = Pt(17)
+        sh1.font.bold = True
+        sh1.font.color.rgb = self._c_heading
+        sh1.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        sh1.paragraph_format.space_before = Pt(28)
+        sh1.paragraph_format.space_after = Pt(8)
+        sh1.paragraph_format.line_spacing = 1.2
+        sh1.paragraph_format.keep_with_next = True
 
         # Heading 2
         sh2 = styles["Heading 2"]
@@ -850,7 +862,7 @@ class DocxBuilder:
 
     # ── Content methods ─────────────────────────────────────────────────
 
-    def _heading(self, level: int, text: str):
+    def _heading(self, level: int, text: str, *, as_title: bool = False):
         b = self.brand
 
         # Insert a page break before this heading if configured.
@@ -871,10 +883,14 @@ class DocxBuilder:
                 # First occurrence — no break
                 pass
 
-        if level == 1:
+        if level == 1 and as_title:
             p = self.doc.add_paragraph(style="Title")
             _add_inline_runs(p, text, base_bold=True, base_color=self._c_heading,
                              base_font=b.font_main, base_size=Pt(18))
+        elif level == 1:
+            p = self.doc.add_paragraph(style="Heading 1")
+            _add_inline_runs(p, text, base_bold=True, base_color=self._c_heading,
+                             base_font=b.font_main, base_size=Pt(17))
         elif level == 2:
             p = self.doc.add_paragraph(style="Heading 2")
             _add_inline_runs(p, text, base_bold=True, base_color=self._c_heading,
@@ -1368,6 +1384,8 @@ def convert_md_to_docx(
     # Walk tokens
     i = 0
     skip_until_content_start = content_start > 0
+    seen_heading = False
+    emitted_body_content = False
     while i < len(tokens):
         tok = tokens[i]
 
@@ -1385,7 +1403,13 @@ def convert_md_to_docx(
             if i < len(tokens) and tokens[i].type == "inline":
                 text = (_extract_text_from_inline_tokens(tokens[i].children)
                         if tokens[i].children else tokens[i].content)
-                builder._heading(level, text)
+                as_title = (
+                    level == 1
+                    and not seen_heading
+                    and not emitted_body_content
+                )
+                builder._heading(level, text, as_title=as_title)
+                seen_heading = True
             i += 2  # skip heading_close + advance
             continue
 
@@ -1398,6 +1422,7 @@ def convert_md_to_docx(
                 img_src, img_alt = _inline_is_image_only(inline_tok)
                 if img_src is not None:
                     builder._image(img_src, img_alt or "")
+                    emitted_body_content = True
                     i += 2
                     continue
                 text = (_extract_text_from_inline_tokens(inline_tok.children)
@@ -1415,9 +1440,11 @@ def convert_md_to_docx(
                 formula_match = re.match(r"^formula\((.+)\)$", text.strip())
                 if formula_match:
                     builder._formula(formula_match.group(1))
+                    emitted_body_content = True
                     i += 2
                     continue
                 builder._paragraph(text)
+                emitted_body_content = True
             i += 2
             continue
 
@@ -1427,25 +1454,30 @@ def convert_md_to_docx(
 
         elif tok.type == "bullet_list_open":
             i = _process_list(tokens, i, builder, ordered=False, level=0)
+            emitted_body_content = True
             continue
 
         elif tok.type == "ordered_list_open":
             i = _process_list(tokens, i, builder, ordered=True, level=0)
+            emitted_body_content = True
             continue
 
         elif tok.type in ("fence", "code_block"):
             builder._code_block(tok.content.rstrip("\n"))
+            emitted_body_content = True
             i += 1
             continue
 
         elif tok.type == "table_open":
             i = _process_table(tokens, i, builder, md_text)
+            emitted_body_content = True
             continue
 
         elif tok.type == "html_block":
             text = tok.content.strip()
             if text:
                 builder._paragraph(text)
+                emitted_body_content = True
             i += 1
             continue
 

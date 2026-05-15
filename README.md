@@ -29,7 +29,6 @@ Markdown → tokens → python-docx
 
 ### Why DOCX-first?
 
-- **Formula rendering** — `formula(E = mc²)` renders as native OMML math in Word. LibreOffice understands OMML and prints it correctly to PDF. A separate HTML/CSS pipeline would not.
 - **100% consistency** — There is one layout engine making all decisions. Tables wrap the same way, headings break at the same points, footers land in the same position. Two independent renderers will always drift.
 - **Heading navigation** — Word styles (Title, Heading 2-4) appear in the navigation pane and in PDF bookmarks.
 - **Single source of truth** — One converter to maintain, not two. A bug fix to table rendering improves both DOCX and PDF output.
