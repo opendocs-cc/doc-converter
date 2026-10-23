@@ -930,11 +930,12 @@ class DocxBuilder:
         tmp_path: Optional[str] = None
         tmp_is_owned = False
         try:
+            # Only remote images are embedded. Markdown comes from untrusted
+            # users, so a local path (e.g. `/dev/zero`, `/etc/...`) must never
+            # be read off the converter's own filesystem.
             if src.startswith(("http://", "https://")):
                 tmp_path = _download_inline_image(src)
                 tmp_is_owned = tmp_path is not None
-            elif os.path.isabs(src) and os.path.exists(src):
-                tmp_path = src
             if tmp_path is None or not os.path.exists(tmp_path):
                 return self._paragraph(placeholder)
 
