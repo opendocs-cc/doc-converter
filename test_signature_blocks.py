@@ -149,7 +149,10 @@ class SignatureBlockRenderingTests(unittest.TestCase):
         box = grid.cell(0, 0)
         area, line, name, title, role = box.paragraphs
         bottom = line._p.pPr.find(qn("w:pBdr")).find(qn("w:bottom"))
-        self.assertEqual(bottom.get(qn("w:color")), "123456")
+        # The lines to sign and date on are in the muted text colour, not
+        # the faint border colour, so they show on paper.
+        self.assertEqual(bottom.get(qn("w:color")), "654321")
+        self.assertEqual(bottom.get(qn("w:sz")), "8")  # 1 pt
         self.assertAlmostEqual(area.paragraph_format.line_spacing.pt + line.paragraph_format.line_spacing.pt, 40)
         self.assertTrue(name.runs[0].bold)
         self.assertEqual(str(title.runs[0].font.color.rgb), "654321")
@@ -158,7 +161,7 @@ class SignatureBlockRenderingTests(unittest.TestCase):
         # The date line is the bottom border of a cell after the "Date" label.
         (date_line,) = grid.cell(1, 0).tables
         blank = date_line.cell(0, 1)._tc
-        self.assertEqual(blank.tcPr.find(qn("w:tcBorders")).find(qn("w:bottom")).get(qn("w:color")), "123456")
+        self.assertEqual(blank.tcPr.find(qn("w:tcBorders")).find(qn("w:bottom")).get(qn("w:color")), "654321")
 
     def test_block_and_heading_stay_on_one_page(self):
         doc = convert("# T\n\nText.\n\n## Signatures\n\n" + BLOCK)

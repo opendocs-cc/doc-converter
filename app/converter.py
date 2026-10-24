@@ -1296,7 +1296,9 @@ class DocxBuilder:
                                              height=_points(SIGNATURE_AREA - TAG_TOP)))
         p = self._add_paragraph(cell)
         _exact_line(p, SIGNATURE_AREA - TAG_LINE)
-        _set_paragraph_border(p, "bottom", self._h_border, 8, 0)
+        # Muted text colour, not the border colour: a printed copy needs a
+        # line that is clearly there to sign on.
+        _set_paragraph_border(p, "bottom", self._c_muted, 8, 0)
 
         p = self._add_paragraph(cell)
         p.paragraph_format.space_before = Pt(6)
@@ -1344,7 +1346,7 @@ class DocxBuilder:
         _exact_line(p, Pt(11), after=Pt(1.5))
         self._runs(p, _plain("Date"), size=Pt(8.5), color=self._c_muted)
         blank._tc.get_or_add_tcPr().insert_element_before(
-            parse_xml(f'<w:tcBorders {nsdecls("w")}>{_border("bottom", self._h_border, 8)}</w:tcBorders>'),
+            parse_xml(f'<w:tcBorders {nsdecls("w")}>{_border("bottom", self._c_muted, 8)}</w:tcBorders>'),
             *_TCPR_AFTER_BORDERS)
         _exact_line(blank.paragraphs[0], Pt(1))
         # A cell ends with a paragraph; this one spaces the rows of boxes.

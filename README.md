@@ -49,7 +49,7 @@ The converter speaks the same dialect as the web view (`packages/shared/src/mark
 | Raw HTML | Tables, `<img width>`, `<details>`, centred `<div>`s, inline formatting tags |
 | `\pagebreak`, `<!-- pagebreak -->`, `<div style="page-break-after: always">` | Next block starts a new page |
 | `Key: value \| Key: value` line near the title | Grey metadata line under the title |
-| ` ```signature ` block (`- role:` / `name:` / `title:` entries) | Signature boxes, two per row: a blank area over a line, the name in bold (or the role), title and role in muted text, and a date line; kept on one page with the heading above it. With `signature_fields: true` each box also carries invisible DocuSeal tags (`{{<role> signature;type=signature;role=<role>;…}}`, `{{<role> date;type=datenow;role=<role>;…}}`) sized to the signature area and the date line. A block that isn't valid stays a code block |
+| ` ```signature ` block (`- role:` / `name:` / `title:` entries) | Signature boxes, two per row: a blank area over a line (muted text colour), the name in bold (or the role), title and role in muted text, and a date line; kept on one page with the heading above it. With `signature_fields: true` each box also carries invisible DocuSeal tags (`{{<role> signature;type=signature;role=<role>;…}}`, `{{<role> date;type=datenow;role=<role>;…}}`) sized to the signature area and the date line. A block that isn't valid stays a code block |
 | `:rocket:` | 🚀 |
 
 Run the tests with `python -m unittest test_heading_styles test_local_images test_markdown_coverage test_signature_blocks`.
