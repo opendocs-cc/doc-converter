@@ -5,7 +5,7 @@ Step-by-step instructions for deploying the OpenDocs Document Converter on a VPS
 ## Prerequisites
 
 - A VPS with Docker installed (tested on Ubuntu 22.04+ / Debian 12+)
-- At least 4 GB RAM (LibreOffice needs memory for PDF conversions)
+- At least 2 GB RAM: about 0.5 GB plus 0.5 GB per conversion worker (see the sizing guide)
 - The converter source code on the server
 
 SSH into your fresh Ubuntu instance:
@@ -55,20 +55,20 @@ Open `.env` and set the three values for your box:
 
 | Variable              | Default     | What to set                                                                                                               |
 | --------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `CONVERT_MAX_WORKERS` | `3`         | Max concurrent conversions. Roughly `1.5 × vCPUs` — see the sizing guide below.                                           |
-| `MEMORY_LIMIT`        | `3G`        | Hard cap on the container. Leave ~1 GB for host OS overhead. LibreOffice peaks at 100–300 MB per PDF conversion.          |
+| `CONVERT_MAX_WORKERS` | `3`         | Conversions at once: one per vCPU the converter may use. More workers than CPUs is slower, not faster.                    |
+| `MEMORY_LIMIT`        | `3G`        | Hard cap on the container: about 0.5 GB plus 0.5 GB per worker. Each worker keeps a LibreOffice running (150–300 MB).      |
 | `VPC_BIND_IP`         | `10.8.96.3` | The interface the container publishes `:8080` on. Set to the box's VPC IP (private-only), or `127.0.0.1` for same-host API. |
 
 ### Sizing guide
 
-| VPS spec        | `CONVERT_MAX_WORKERS` | `MEMORY_LIMIT` | DOCX/min | PDF/min |
-| --------------- | --------------------- | -------------- | -------- | ------- |
-| 1 vCPU /  2 GB  | 2                     | `1500M`        | ~30      | ~10     |
-| 2 vCPU /  4 GB  | 3                     | `3G`           | ~60      | ~20     |
-| 4 vCPU /  8 GB  | 6                     | `7G`           | ~100     | ~40     |
-| 8 vCPU / 16 GB  | 12                    | `15G`          | ~200     | ~80     |
+| Converter's share of the box | `CONVERT_MAX_WORKERS` | `MEMORY_LIMIT` | PDFs per second, older cloud CPU | PDFs per second, current CPU |
+| ---------------------------- | --------------------- | -------------- | -------------------------------- | ---------------------------- |
+| 1 vCPU                       | 1                     | `1G`           | ~1                               | ~3                           |
+| 2 vCPU                       | 2                     | `1500M`        | ~2                               | ~6                           |
+| 3 vCPU                       | 3                     | `2G`           | ~3                               | ~8                           |
+| 4 vCPU                       | 4                     | `2500M`        | ~4                               | ~10                          |
 
-PDF is slower than DOCX because each PDF conversion spawns a LibreOffice process to print the Word document. This is the tradeoff for 100% visual consistency between formats.
+DOCX alone is two to three times faster: it skips LibreOffice. If the converter shares the box with the API and web app, give it all but one vCPU.
 
 ## 3. Build and start the service
 
@@ -97,7 +97,7 @@ docker compose exec converter wget -qO- http://localhost:8080/health
 Expected response:
 
 ```json
-{ "status": "ok", "version": "0.1.0", "max_workers": 6 }
+{ "status": "ok", "version": "0.1.0", "max_workers": 3, "libreoffice_ready": 3 }
 ```
 
 ## 5. Test a conversion
@@ -324,7 +324,9 @@ The `restart: unless-stopped` policy in `docker-compose.yml` handles this. Docke
 
 ### LibreOffice conversion fails or hangs
 
-SSH into the container and test manually:
+Each worker's LibreOffice is restarted automatically after a failure or a hang (`CONVERSION_TIMEOUT`), and the document is retried on a fresh LibreOffice. `/healthz` reports how many LibreOffice workers are idle (`libreoffice_ready`), and the logs say `LibreOffice worker N failed` when one is restarted.
+
+To test LibreOffice by hand, SSH into the container:
 
 ```bash
 docker compose exec converter bash
@@ -352,7 +354,7 @@ killall -9 soffice.bin 2>/dev/null
 
 ### Out of memory on large documents
 
-LibreOffice uses more memory than the DOCX converter alone. Each PDF conversion can peak at 100-300 MB. Drop `CONVERT_MAX_WORKERS` (and optionally raise `MEMORY_LIMIT`) in `.env`, then redeploy:
+Each worker keeps a LibreOffice running, which holds 150 to 300 MB and grows with image-heavy documents until it's restarted (`LIBREOFFICE_RESTART_AFTER`). Drop `CONVERT_MAX_WORKERS` (or raise `MEMORY_LIMIT`) in `.env`, then redeploy:
 
 ```bash
 # Edit .env — e.g. CONVERT_MAX_WORKERS=3
@@ -363,9 +365,7 @@ Compose detects the env change and recreates the container with the new limits.
 
 ### PDF conversions are slow
 
-This is expected — each PDF conversion spawns a LibreOffice process. Typical conversion time is 1-3 seconds per document. For batch PDF jobs, the semaphore ensures they don't overwhelm the box.
-
-If you need higher PDF throughput, scale horizontally by running multiple converter instances behind a load balancer, or use a larger VPS.
+A typical PDF takes well under a second of CPU, but requests queue when more arrive than there are workers. Check that `CONVERT_MAX_WORKERS` matches the converter's CPUs (more workers than CPUs is slower), and that `libreoffice_ready` in `/healthz` isn't stuck at 0. For more throughput, give the converter more (or faster) CPUs, or run more converter instances behind a load balancer: the service keeps no state.
 
 ### Connection refused from API server
 

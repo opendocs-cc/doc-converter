@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -27,6 +28,7 @@ from typing import Optional
 from docx import Document
 from docx.blkcntnr import BlockItemContainer
 from docx.enum.section import WD_ORIENT
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml import parse_xml
@@ -36,7 +38,7 @@ from lxml import etree
 
 from .branding import BrandingConfig, OPENDOCS_BRAND
 from .highlight import DIFF_BACKGROUNDS, highlight, language_of
-from .images import BUNDLED_LOGO_SENTINEL, PreparedImage, prepare_image_source, resolve_logo
+from .images import BUNDLED_LOGO_SENTINEL, PreparedImage, prefetch_images, prepare_image_source, resolve_logo
 from .markdown_parser import Slugger, emojize, make_parser, preprocess
 from .math_omml import latex_to_omml
 
@@ -550,6 +552,12 @@ class DocxBuilder:
         self._num_counter = 100
         self._bullet_num: Optional[int] = None
 
+        # Paragraph style name → style id (None for the default style)
+        self._style_ids: dict[str, Optional[str]] = {}
+
+        # Remote images downloaded up front (``prefetch_images``)
+        self.prefetched: dict[str, Optional[bytes]] = {}
+
         # Bookmarks: heading slug → name, footnote anchors
         self.anchors: dict[str, str] = {}
         self._bookmark_id = 0
@@ -641,13 +649,26 @@ class DocxBuilder:
     def _available(self) -> int:
         return max(int(self._frame.width - self._indent), int(Cm(2)))
 
+    def _style_id(self, name: str) -> Optional[str]:
+        """The id to put in ``w:pStyle`` for a paragraph style, looked up
+        once: python-docx scans every style for the default one on each
+        assignment, which was a third of the build time."""
+        if name not in self._style_ids:
+            self._style_ids[name] = self.doc.part.get_style_id(name, WD_STYLE_TYPE.PARAGRAPH)
+        return self._style_ids[name]
+
+    def _add_paragraph(self, body, style: str = "Normal"):
+        p = body.add_paragraph()
+        p._p.style = self._style_id(style)
+        return p
+
     def _new_paragraph(self, style: str = "Normal"):
         frame = self._frame
         if frame.fresh is not None:
             p, frame.fresh = frame.fresh, None
-            p.style = self.doc.styles[style]
+            p._p.style = self._style_id(style)
         else:
-            p = frame.body.add_paragraph(style=style)
+            p = self._add_paragraph(frame.body, style)
         if self._indent:
             p.paragraph_format.left_indent = self._indent
         if self._align is not None:
@@ -684,7 +705,7 @@ class DocxBuilder:
     def _spacer(self, height=PARA_AFTER):
         """An empty paragraph ``height`` tall. Keeps consecutive tables
         apart (Word merges touching tables) and spaces boxes."""
-        p = self._frame.body.add_paragraph(style="Normal")
+        p = self._add_paragraph(self._frame.body)
         pf = p.paragraph_format
         pf.space_before = Pt(0)
         pf.space_after = Pt(0)
@@ -803,7 +824,7 @@ class DocxBuilder:
         an HTML ``width``, else the image's CSS size. Inline pictures are
         capped at a few lines tall; figures at part of the page.
         """
-        prepared = prepare_image_source(image.get("src", ""))
+        prepared = prepare_image_source(image.get("src", ""), self.prefetched)
         if prepared is None:
             return None
         try:
@@ -1765,6 +1786,21 @@ class _Renderer:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _image_urls(tokens) -> list[str]:
+    """Every image source in the document, in order (Markdown images and
+    ``<img>`` tags), so they can be downloaded in parallel up front."""
+    urls: list[str] = []
+    for tok in tokens:
+        if tok.type == "html_block":
+            urls.extend(_html_attr(tag, "src") for tag in re.findall(r"<img\b[^>]*>", tok.content, re.I))
+        for child in tok.children or []:
+            if child.type == "image":
+                urls.append(child.attrGet("src") or "")
+            elif child.type == "html_inline" and re.match(r"<\s*img\b", child.content, re.I):
+                urls.append(_html_attr(child.content, "src"))
+    return urls
+
+
 def _front_matter_title(tokens) -> Optional[str]:
     for tok in tokens:
         if tok.type == "front_matter":
@@ -1857,9 +1893,13 @@ def convert_md_to_docx(
         page_break_before=page_break_before,
         skip_first_break=skip_first_break,
     )
-    logo_path, logo_is_temp = resolve_logo(brand)
-
     tokens = make_parser().parse(preprocess(md_text))
+    # Download the logo and every image at once rather than one by one as
+    # the document is built.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        logo = pool.submit(resolve_logo, brand)
+        builder.prefetched = prefetch_images(_image_urls(tokens))
+        logo_path, logo_is_temp = logo.result()
     title_tokens, metadata, skip, slugs = _scan(tokens)
     for n, slug in enumerate(slugs):
         builder.anchors.setdefault(slug, f"_od_h{n + 1}")

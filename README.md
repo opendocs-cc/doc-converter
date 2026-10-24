@@ -25,7 +25,7 @@ Markdown → tokens → python-docx
 2. **Build** — A `DocxBuilder` walks the token stream and constructs a Word document using [python-docx](https://python-docx.readthedocs.io/). Quotes, alerts, code blocks and figures are *boxes* (one-cell tables) that can hold any other block, so a heading, list or table inside a quote keeps the quote's bar.
 3. **Brand** — Every color, font, and identity field comes from a `BrandingConfig` passed per-request. Different workspaces can have different styles.
 4. **Serialize** — The document is written to bytes. For DOCX requests, these bytes are returned directly.
-5. **Print to PDF** — For PDF requests, the DOCX is written to a temp file and converted using `soffice --headless --convert-to pdf` (LibreOffice). The resulting PDF is a faithful print of the Word document.
+5. **Print to PDF** — For PDF requests, LibreOffice prints the DOCX to PDF. LibreOffice is kept running between conversions (one instance per worker, through [unoserver](https://github.com/unoconv/unoserver)), so a conversion doesn't pay for starting it. The resulting PDF is a faithful print of the Word document, identical to `soffice --headless --convert-to pdf`.
 
 ### Why DOCX-first?
 
@@ -74,7 +74,7 @@ Smoke-test:
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok","version":"0.1.0","max_workers":6}
+# {"status":"ok","version":"0.1.0","max_workers":2,"libreoffice_ready":2}
 
 curl -X POST http://localhost:8080/convert/docx \
   -H 'Content-Type: application/json' \
@@ -96,7 +96,7 @@ Same `curl` commands work. LibreOffice, fonts, and tini are baked into the image
 
 - Boots under `tini` as PID 1 (reaps LibreOffice subprocesses, forwards SIGTERM cleanly).
 - Runs a single uvicorn worker as a non-root user (`app`, uid 10001).
-- All concurrency is gated by `asyncio.Semaphore(CONVERT_MAX_WORKERS)` inside that one process. Override at runtime with `-e CONVERT_MAX_WORKERS=N` if your box is larger or smaller than the 4 vCPU / 8 GB sizing baseline.
+- Runs `CONVERT_MAX_WORKERS` conversions at once (see *Concurrency*). Override at runtime with `-e CONVERT_MAX_WORKERS=N`; one worker per CPU is the fastest setting.
 - Reports container health by polling `/health` every 30s — `docker ps` and orchestrators pick it up.
 
 ## API
@@ -128,7 +128,7 @@ curl -X POST http://localhost:8080/convert/pdf \
 Liveness check.
 
 ```json
-{ "status": "ok", "version": "0.1.0", "max_workers": 6 }
+{ "status": "ok", "version": "0.1.0", "max_workers": 2, "libreoffice_ready": 2 }
 ```
 
 ### Request body
@@ -295,13 +295,27 @@ brand = pro_plan_brand(
 
 ## Concurrency
 
-The service uses an `asyncio.Semaphore` to limit concurrent conversions. Each request runs the CPU-bound conversion in a thread pool executor, but no more than `CONVERT_MAX_WORKERS` conversions run simultaneously. This keeps memory bounded on small VPS instances.
+`CONVERT_MAX_WORKERS` conversions run at once. Each worker is a process that builds Word documents (Python runs one core per process) plus a LibreOffice that's kept running to print them to PDF, so documents are built and printed in parallel and LibreOffice's startup is paid once, not per PDF. Requests beyond that wait their turn. A document's images are downloaded in parallel, and recently used images are cached.
 
-| Environment variable  | Default | Description                |
-| --------------------- | ------- | -------------------------- |
-| `CONVERT_MAX_WORKERS` | `6`     | Max concurrent conversions |
+| Environment variable        | Default | Description |
+| --------------------------- | ------- | ----------- |
+| `CONVERT_MAX_WORKERS`       | `2`     | Conversions at once. Set it to the number of CPUs the converter may use: more workers than CPUs is slower, not faster. |
+| `LIBREOFFICE_RESTART_AFTER` | `200`   | Restart each LibreOffice after this many conversions, which keeps its memory in check. |
+| `CONVERSION_TIMEOUT`        | `60`    | Seconds before a hung LibreOffice is stopped and restarted. |
+| `IMAGE_CACHE_MB`            | `64`    | Recently downloaded images kept per worker process. |
 
-On a 4 vCPU / 8 GB box with 6 workers, expect roughly 80-100 DOCX conversions per minute. PDF is slower because each conversion spawns a LibreOffice process — expect roughly 30-50 PDFs per minute depending on document complexity.
+Memory: about 0.5 GB plus 0.5 GB per worker. A worker's LibreOffice holds 150 to 300 MB, more after image-heavy documents.
+
+Throughput scales with CPUs. A typical PDF takes about 0.3 CPU-seconds on a current desktop CPU, and around three times that on an older cloud CPU. A burst of 50 PDFs, measured with one worker per CPU on a fast CPU:
+
+| CPUs / workers | 50 PDFs at once | Peak memory |
+| -------------- | --------------- | ----------- |
+| 1 / 1          | 15 s            | 0.44 GB     |
+| 2 / 2          | 8 s             | 0.69 GB     |
+| 3 / 3          | 6 s             | 0.99 GB     |
+| 4 / 4          | 5 s             | 1.2 GB      |
+
+The previous version (one conversion at a time, starting LibreOffice for every PDF) took 60 s for the same burst on 1 CPU.
 
 ## Tech stack
 

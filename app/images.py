@@ -23,7 +23,11 @@ import os
 import re
 import socket
 import tempfile
-from typing import NamedTuple, Optional
+import threading
+import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from typing import Iterable, NamedTuple, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -85,6 +89,49 @@ def _is_safe_remote_url(url: str) -> bool:
     return bool(addresses) and all(not _is_private_ip(addr) for addr in addresses)
 
 
+# Recently downloaded images, per process. Images on OpenDocs' own storage
+# never change (every upload gets a new name); other URLs are kept briefly.
+_CACHE_MAX_BYTES = int(os.getenv("IMAGE_CACHE_MB", "64")) * 1024 * 1024
+_CACHE_TTL = 600.0
+_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
+_cache_bytes = 0
+_cache_lock = threading.Lock()
+# Parallel downloads per document.
+_PREFETCH_WORKERS = 8
+
+
+def _cache_get(url: str) -> Optional[bytes]:
+    with _cache_lock:
+        hit = _cache.get(url)
+        if hit is None:
+            return None
+        stored, data = hit
+        if time.monotonic() - stored > _CACHE_TTL:
+            _cache_drop(url)
+            return None
+        _cache.move_to_end(url)
+        return data
+
+
+def _cache_drop(url: str) -> None:
+    global _cache_bytes
+    _, data = _cache.pop(url)
+    _cache_bytes -= len(data)
+
+
+def _cache_put(url: str, data: bytes) -> None:
+    global _cache_bytes
+    if len(data) > _CACHE_MAX_BYTES // 4:
+        return
+    with _cache_lock:
+        if url in _cache:
+            _cache_drop(url)
+        _cache[url] = (time.monotonic(), data)
+        _cache_bytes += len(data)
+        while _cache_bytes > _CACHE_MAX_BYTES and _cache:
+            _cache_drop(next(iter(_cache)))
+
+
 def download_image(url: str) -> Optional[PreparedImage]:
     """Download and prepare ``url``. Returns ``None`` on any failure
     (unsafe host, network error, non-2xx, size cap, unsupported type).
@@ -93,6 +140,33 @@ def download_image(url: str) -> Optional[PreparedImage]:
     ``add_picture`` has read the bytes. ``add_picture`` reads eagerly, so
     the file can be removed before ``doc.save``.
     """
+    data = fetch_image_bytes(url)
+    return _prepare_image(data) if data is not None else None
+
+
+def prefetch_images(urls: Iterable[str]) -> dict[str, Optional[bytes]]:
+    """Download ``urls`` in parallel: ``{url: bytes or None}``."""
+    remote = list(dict.fromkeys(u.strip() for u in urls if u.strip().startswith(("http://", "https://"))))
+    if not remote:
+        return {}
+    if len(remote) == 1:
+        return {remote[0]: fetch_image_bytes(remote[0])}
+    with ThreadPoolExecutor(max_workers=min(_PREFETCH_WORKERS, len(remote))) as pool:
+        return dict(zip(remote, pool.map(fetch_image_bytes, remote)))
+
+
+def fetch_image_bytes(url: str) -> Optional[bytes]:
+    """The bytes at ``url`` (cached), or ``None`` on any failure."""
+    cached = _cache_get(url)
+    if cached is not None:
+        return cached
+    data = _download(url)
+    if data is not None:
+        _cache_put(url, data)
+    return data
+
+
+def _download(url: str) -> Optional[bytes]:
     try:
         headers = {
             # Some CDNs (Wikimedia in particular) reject the default httpx
@@ -135,7 +209,7 @@ def download_image(url: str) -> Optional[PreparedImage]:
                     data.extend(chunk)
                     if len(data) > _INLINE_IMAGE_MAX_BYTES:
                         return None
-                return _prepare_image(bytes(data))
+                return bytes(data)
         return None
     except Exception:
         return None
@@ -263,8 +337,9 @@ def _prepare_image(data: bytes) -> Optional[PreparedImage]:
         return None
 
 
-def prepare_image_source(src: str) -> Optional[PreparedImage]:
+def prepare_image_source(src: str, prefetched: Optional[dict] = None) -> Optional[PreparedImage]:
     """Fetch and prepare an image reference from the Markdown.
+    ``prefetched`` holds images already downloaded (``prefetch_images``).
 
     Only remote and ``data:`` images are embedded. Markdown comes from
     untrusted users, so a local path (e.g. `/dev/zero`, `/etc/...`) must
@@ -272,7 +347,8 @@ def prepare_image_source(src: str) -> Optional[PreparedImage]:
     """
     src = (src or "").strip()
     if src.startswith(("http://", "https://")):
-        return download_image(src)
+        data = prefetched[src] if prefetched is not None and src in prefetched else fetch_image_bytes(src)
+        return _prepare_image(data) if data is not None else None
     if src.lower().startswith("data:image/"):
         return data_uri_image(src)
     return None
