@@ -162,7 +162,7 @@ These are the same across all themes (only listed once above for opendocs):
 | `table_header_fg`     |   `#FFFFFF`   | Table header text |
 | `footer_normal_color` |   `#737373`   | Footer subtitle   |
 | `font_main`           |    `Arial`    | Primary font      |
-| `font_code`           | `Courier New` | Code font         |
+| `font_code`           | `JetBrains Mono` | Code font      |
 
 ## Font options
 
@@ -190,7 +190,7 @@ The Docker image ships with ten curated `font_main` options. Pass any of these b
 }
 ```
 
-`font_code` stays `Courier New` by default. Change it per-request if you want a different monospace for code blocks. When `font_main` is `JetBrains Mono`, code blocks use it too.
+`font_code` is `JetBrains Mono` by default (installed in the image). Change it per-request if you want a different monospace for code. When `font_main` is itself `JetBrains Mono`, code uses it too.
 
 ## How to use a theme via the API
 

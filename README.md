@@ -195,7 +195,7 @@ Defaults match the **OpenDocs house style** — a deep Purple-950 accent (`#2E1C
 | Property            | Default               | Description                          |
 | ------------------- | --------------------- | ------------------------------------ |
 | `font_main`         | `Arial`               | Primary font                         |
-| `font_code`         | `Courier New`         | Monospace font                       |
+| `font_code`         | `JetBrains Mono`      | Monospace font                       |
 | `company_name`      | `OpenDocs`            | Footer bold line                     |
 | `company_url`       | `https://opendocs.cc` | Footer link target                   |
 | `company_url_label` | `opendocs.cc`         | Footer link display text             |
@@ -233,7 +233,7 @@ Ten fonts are bundled in the Docker image and can be selected by name. Any other
 { "branding": { "font_main": "Vollkorn" } }
 ```
 
-`font_code` stays `Courier New` by default; change it per-request if you want a different monospace for code blocks. When `font_main` is `JetBrains Mono`, code blocks use it too.
+`font_code` is `JetBrains Mono` by default (installed in the image); change it per-request if you want a different monospace for code. When `font_main` is itself `JetBrains Mono`, code uses it too.
 
 ## Pre-built themes
 
