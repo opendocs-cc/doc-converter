@@ -29,7 +29,7 @@ from docx import Document
 from docx.blkcntnr import BlockItemContainer
 from docx.enum.section import WD_ORIENT
 from docx.enum.style import WD_STYLE_TYPE
-from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls, qn
@@ -41,6 +41,7 @@ from .highlight import DIFF_BACKGROUNDS, highlight, language_of
 from .images import BUNDLED_LOGO_SENTINEL, PreparedImage, prefetch_images, prepare_image_source, resolve_logo
 from .markdown_parser import Slugger, emojize, make_parser, preprocess
 from .math_omml import latex_to_omml
+from .signature_blocks import SignatureEntry, date_tag, is_signature_info, parse_signature_block, signature_tag
 
 __all__ = ["convert_md_to_docx", "BUNDLED_LOGO_SENTINEL"]
 
@@ -93,6 +94,38 @@ WEB_COLUMN_PX = 720
 # a heading and its figure (or two figures) usually share a page.
 FIGURE_MAX_HEIGHT = 0.42
 
+# Signature boxes (```signature blocks), two per row.
+SIGNATURE_GAP = Pt(28)        # between the two boxes of a row
+SIGNATURE_AREA = Pt(40)       # blank space to sign in, down to the line
+SIGNATURE_ROW_GAP = Pt(20)    # between rows of boxes
+DATE_LABEL = Pt(30)           # where the date line starts
+DATE_LINE = Pt(120)           # how long it is
+DATE_LINE_HEIGHT = Pt(18)     # blank space to write the date in, down to the line
+# DocuSeal field tags (``signature_fields``) are white 1 pt text (Word's
+# smallest size) on a line of their own at the top-left of the area the
+# field covers. A tag never moves the visible layout, and even the tag for
+# a 60-character role of wide letters stays on one line (a tag split over
+# two lines is no longer a tag).
+#
+# DocuSeal puts the field where the tag is, sized by the tag's ``width``
+# and ``height``. Units: DocuSeal's docs say "pixels" ("Absolute width of
+# the field in pixels" at
+# https://www.docuseal.com/guides/use-embedded-text-field-tags-in-the-pdf-to-create-a-fillable-form,
+# "Width in pixels" in the docuseal@1.0.4 npm package's
+# skills/docuseal-cli/references/field-tags.md) without defining a pixel.
+# For a PDF that is the PDF unit, the point (1/72 in): DocuSeal reads pages
+# with PDFium and scales field areas by the page size in points
+# (lib/templates/find_pdfium_acro_fields.rb in github.com/docusealco/docuseal),
+# and its sample https://www.docuseal.com/examples/fieldtags.pdf sizes an
+# image field width=200;height=30 on a 612 x 792 pt page. So the sizes we
+# write are points: the box width x the signature area, and the date line.
+TAG_SIZE = Pt(1)
+TAG_LINE = Pt(4)              # height of a tag's line
+TAG_COLOR = "FFFFFF"
+# The tag's glyphs start this far below the top of its line (measured in
+# LibreOffice's PDF: pdftotext -bbox), so the field reaches the line.
+TAG_TOP = Pt(2.3)
+
 PAGE_BREAK_TEXT = {"\\pagebreak", "\\newpage", "\\clearpage"}
 _PAGE_BREAK_HTML = re.compile(
     r"<!--\s*(?:page-?break|new-?page)\s*-->"
@@ -118,6 +151,10 @@ def _hex_strip(hex_color: str) -> str:
 
 def _twips(length) -> int:
     return int(Emu(length).pt * 20)
+
+
+def _points(length) -> int:
+    return round(Emu(int(length)).pt)
 
 
 def _detect_metadata_line(line: str) -> bool:
@@ -202,6 +239,24 @@ def _set_cell_shading(cell, fill: str):
 def _cant_split(row):
     row._tr.get_or_add_trPr().insert_element_before(
         parse_xml(f'<w:cantSplit {nsdecls("w")}/>'), *_TRPR_AFTER_CANT_SPLIT)
+
+
+def _set_cell_margins(cell, *, top=0, right=0, bottom=0, left=0):
+    """Padding of one cell, in twips (overrides the table's)."""
+    cell._tc.get_or_add_tcPr().insert_element_before(
+        parse_xml(f'<w:tcMar {nsdecls("w")}>'
+                  f'<w:top w:w="{top}" w:type="dxa"/><w:left w:w="{left}" w:type="dxa"/>'
+                  f'<w:bottom w:w="{bottom}" w:type="dxa"/><w:right w:w="{right}" w:type="dxa"/>'
+                  f'</w:tcMar>'),
+        *_TCPR_AFTER_BORDERS[_TCPR_AFTER_BORDERS.index("w:tcMar") + 1:])
+
+
+def _exact_line(p, height, *, before=Pt(0), after=Pt(0)):
+    pf = p.paragraph_format
+    pf.space_before = before
+    pf.space_after = after
+    pf.line_spacing = Emu(int(height))  # a Length: a plain number is a multiple
+    pf.line_spacing_rule = 4  # exact
 
 
 def _repeat_header(row):
@@ -506,10 +561,13 @@ class DocxBuilder:
 
     def __init__(self, brand: BrandingConfig, *, landscape: bool = False,
                  page_break_before: int | None = None,
-                 skip_first_break: bool = True):
+                 skip_first_break: bool = True,
+                 signature_fields: bool = False):
         self.doc = Document()
         self.brand = brand
         self._landscape = landscape
+        # Put DocuSeal field tags in signature boxes.
+        self._signature_fields = signature_fields
 
         # Page-break config: which heading level triggers a break
         # e.g. page_break_before=2 means every H2 gets a page break above it.
@@ -930,7 +988,19 @@ class DocxBuilder:
         self._runs(p, _plain("   ·   ".join(parts)), size=Pt(9.5), color=self._c_muted)
         return p
 
-    def heading(self, level: int, segments, *, slug: Optional[str] = None):
+    def _heading_breaks(self, level: int) -> bool:
+        """Whether a heading at ``level`` starts a new page (``page_break_before``).
+        Counts the heading, so call it once per heading."""
+        if self._page_break_level is None or min(level, 6) > self._page_break_level:
+            return False
+        self._break_heading_count += 1
+        return not (self._skip_first_break and self._break_heading_count == 1)
+
+    def heading(self, level: int, segments, *, slug: Optional[str] = None,
+                page_break: Optional[bool] = None):
+        """``page_break``: ``None`` decides from ``page_break_before``; a
+        caller that already decided (a heading boxed with what follows it)
+        passes ``False``."""
         level = min(level, 6)
         p = self._new_paragraph(f"Heading {level}")
         # On the paragraph itself, not just the style: LibreOffice maps
@@ -947,10 +1017,8 @@ class DocxBuilder:
                 _letter_spacing(run, 12)
         if slug and slug in self.anchors:
             self._bookmark(p, self.anchors[slug])
-        if self._page_break_level is not None and level <= self._page_break_level:
-            self._break_heading_count += 1
-            if not (self._skip_first_break and self._break_heading_count == 1):
-                p.paragraph_format.page_break_before = True
+        if self._heading_breaks(level) if page_break is None else page_break:
+            p.paragraph_format.page_break_before = True
         self._after_heading = True
         return p
 
@@ -1151,6 +1219,149 @@ class DocxBuilder:
                     run.font.color.rgb = _hex_to_rgb(color or self._c_body)
                     if italic:
                         run.font.italic = True
+
+    # ── Signature blocks ────────────────────────────────────────────────
+
+    def signature_block(self, entries: list[SignatureEntry], heading: Optional[tuple] = None):
+        """One signature box per entry, two per row.
+
+        The rows sit in a borderless box that can't split, so the block
+        stays on one page. A ``heading`` right above the block goes in the
+        box too, as with figures: LibreOffice drops keep-with-next when the
+        next block doesn't fit on the page.
+        """
+        if heading is not None:
+            level = min(heading[0], 6)
+            # A page break inside a table cell is ignored, so break above the box.
+            if self._heading_breaks(level):
+                self.page_break()
+            else:
+                self._spacer(HEADINGS[level][4])
+        none = "".join(_no_border(side) for side in ("top", "left", "bottom", "right"))
+        with self.box(borders=none, padding=(Pt(2), Pt(0), Pt(2), Pt(0)),
+                      cant_split=True, after=Pt(10)):
+            if heading is not None:
+                level, segments, slug = heading
+                self.heading(level, segments, slug=slug, page_break=False)
+            self._signature_rows(entries)
+        self._after_heading = False
+
+    def _signature_rows(self, entries: list[SignatureEntry]):
+        """A borderless table, two boxes across. Each pair of boxes takes
+        two table rows, the signature areas with names and then the date
+        lines, so the date lines line up even when one box has more lines."""
+        width = self._available
+        widths = [width // 2, width - width // 2]
+        half_gap = _twips(SIGNATURE_GAP) // 2
+        inner = int(width // 2 - Pt(half_gap / 20))  # text width of a box
+        pairs = [entries[n:n + 2] for n in range(0, len(entries), 2)]
+        table = BlockItemContainer.add_table(self._frame.body, 2 * len(pairs), 2, Emu(width))
+        _table_properties(
+            table, width=width, indent=self._indent,
+            borders="".join(_no_border(side) for side in
+                            ("top", "left", "bottom", "right", "insideH", "insideV")),
+            margins=(0, 0, 0, 0))
+        for column, w in zip(table.columns, widths):
+            column.width = Emu(w)
+        for r, row in enumerate(table.rows):
+            _cant_split(row)
+            pair = pairs[r // 2]
+            last_row = r == len(table.rows) - 1
+            for c, cell in enumerate(row.cells):
+                cell.width = Emu(widths[c])
+                # The gap is split between the two boxes, so their outer
+                # edges line up with the text column.
+                _set_cell_margins(cell, left=half_gap if c else 0, right=0 if c else half_gap)
+                if c >= len(pair):
+                    _exact_line(cell.paragraphs[0], Pt(1))  # odd one out: empty
+                elif r % 2 == 0:
+                    self._signature_box(cell, pair[c], inner)
+                else:
+                    self._date_line(cell, pair[c].role, inner, last_row=last_row)
+
+    def _signature_box(self, cell, entry: SignatureEntry, width: int):
+        """Blank signature area over a line, then the name in bold (the role
+        if there's no name), the title and the role.
+
+        The boxes look the same with and without ``signature_fields``: the
+        tags' lines are there either way, empty without them.
+        """
+        role = entry.role
+
+        # Signature area: the tag's line, then blank space down to the line.
+        p = cell.paragraphs[0]
+        _exact_line(p, TAG_LINE)
+        if self._signature_fields:
+            self._field_tag(p, signature_tag(role, width=_points(width),
+                                             height=_points(SIGNATURE_AREA - TAG_TOP)))
+        p = self._add_paragraph(cell)
+        _exact_line(p, SIGNATURE_AREA - TAG_LINE)
+        # Muted text colour, not the border colour: a printed copy needs a
+        # line that is clearly there to sign on.
+        _set_paragraph_border(p, "bottom", self._c_muted, 8, 0)
+
+        p = self._add_paragraph(cell)
+        p.paragraph_format.space_before = Pt(6)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing = 1.2
+        self._runs(p, _plain(entry.name or role), size=BODY_SIZE, color=self._c_body, bold=True)
+        for text, size, shown in ((entry.title, Pt(9.5), bool(entry.title)),
+                                  (role, Pt(8.5), bool(entry.name))):
+            if not shown:
+                continue
+            p = self._add_paragraph(cell)
+            p.paragraph_format.space_before = Pt(1)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.2
+            self._runs(p, _plain(text), size=size, color=self._c_muted)
+
+    def _date_line(self, cell, role: str, width: int, *, last_row: bool):
+        """The label "Date", then a short line: a borderless two-cell table
+        whose second cell has a bottom border (LibreOffice draws neither
+        the underline nor the leader of a tab at the end of a line). The
+        date tag sits just above where the line starts, on a line as wide
+        as the box so it never wraps."""
+        line = min(int(DATE_LINE), int(width - DATE_LABEL))
+        p = cell.paragraphs[0]
+        _exact_line(p, TAG_LINE, before=Pt(6))
+        p.paragraph_format.left_indent = DATE_LABEL
+        if self._signature_fields:
+            self._field_tag(p, date_tag(role, width=_points(line),
+                                        height=_points(TAG_LINE - TAG_TOP + DATE_LINE_HEIGHT)))
+        widths = [int(DATE_LABEL), line]
+        table = BlockItemContainer.add_table(cell, 1, 2, Emu(sum(widths)))
+        _table_properties(
+            table, width=sum(widths), indent=0,
+            borders="".join(_no_border(side) for side in
+                            ("top", "left", "bottom", "right", "insideH", "insideV")),
+            margins=(0, 0, 0, 0))
+        row = table.rows[0]
+        row.height = DATE_LINE_HEIGHT
+        row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+        for column, cell_, w in zip(table.columns, row.cells, widths):
+            column.width = cell_.width = Emu(w)
+        label, blank = row.cells
+        label.vertical_alignment = WD_ALIGN_VERTICAL.BOTTOM
+        p = label.paragraphs[0]
+        _exact_line(p, Pt(11), after=Pt(1.5))
+        self._runs(p, _plain("Date"), size=Pt(8.5), color=self._c_muted)
+        blank._tc.get_or_add_tcPr().insert_element_before(
+            parse_xml(f'<w:tcBorders {nsdecls("w")}>{_border("bottom", self._c_muted, 8)}</w:tcBorders>'),
+            *_TCPR_AFTER_BORDERS)
+        _exact_line(blank.paragraphs[0], Pt(1))
+        # A cell ends with a paragraph; this one spaces the rows of boxes.
+        _exact_line(self._add_paragraph(cell), Pt(1),
+                    after=Pt(0) if last_row else SIGNATURE_ROW_GAP)
+
+    def _field_tag(self, p, tag: str):
+        """A DocuSeal text tag: white, tiny, and never spell-checked (Word
+        would draw red squiggles under the invisible text)."""
+        run = p.add_run(tag)
+        f = run.font
+        f.name = self.brand.font_main
+        f.size = TAG_SIZE
+        f.color.rgb = _hex_to_rgb(TAG_COLOR)
+        f.no_proof = True
 
     # ── Lists ───────────────────────────────────────────────────────────
 
@@ -1490,8 +1701,21 @@ class _Renderer:
                 images, caption, nxt = figure
                 self.b.figure(images, caption, heading=(level, segments, slug))
                 return nxt
+            signers = self._signature_at(i + 3)
+            if signers is not None:
+                self.b.signature_block(signers, heading=(level, segments, slug))
+                return i + 4
             self.b.heading(level, segments, slug=slug)
         return i + 3
+
+    def _signature_at(self, i: int) -> Optional[list[SignatureEntry]]:
+        """The entries if the block at ``i`` is a valid ```signature fence."""
+        if i >= len(self.tokens):
+            return None
+        tok = self.tokens[i]
+        if tok.type != "fence" or not is_signature_info(tok.info):
+            return None
+        return parse_signature_block(tok.content)
 
     def _figure_at(self, i: int):
         """``(images, caption, next index)`` if the block at ``i`` is an
@@ -1563,9 +1787,13 @@ class _Renderer:
     def _fence(self, i):
         self._ensure_title()
         tok = self.tokens[i]
-        if language_of(tok.info) == "math":
+        signers = self._signature_at(i)
+        if signers is not None:
+            self.b.signature_block(signers)
+        elif language_of(tok.info) == "math":
             self.b.math_block(tok.content)
         else:
+            # Includes ```signature blocks that aren't valid.
             self.b.code_block(tok.content, tok.info)
         return i + 1
 
@@ -1864,6 +2092,7 @@ def convert_md_to_docx(
     landscape: bool = False,
     page_break_before: int | None = None,
     skip_first_break: bool = True,
+    signature_fields: bool = False,
 ) -> bytes:
     """Convert markdown text to a styled .docx and return the bytes.
 
@@ -1883,6 +2112,9 @@ def convert_md_to_docx(
         When True (default), the very first heading that would trigger
         a page break is skipped — avoids a blank page at the start
         of the document.
+    signature_fields : bool
+        Put invisible DocuSeal field tags (signature and signing date) in
+        each ```signature box, for documents sent for e-signature.
     """
     if brand is None:
         brand = OPENDOCS_BRAND
@@ -1892,6 +2124,7 @@ def convert_md_to_docx(
         landscape=landscape,
         page_break_before=page_break_before,
         skip_first_break=skip_first_break,
+        signature_fields=signature_fields,
     )
     tokens = make_parser().parse(preprocess(md_text))
     # Download the logo and every image at once rather than one by one as
