@@ -1,7 +1,10 @@
 # Core conversion
 python-docx>=1.1.0
-markdown-it-py>=3.0.0
-mdit-py-plugins>=0.5.0   # footnotes
+markdown-it-py>=4.1.0    # GitHub alerts and task lists
+mdit-py-plugins>=0.5.0   # footnotes, math, definition lists, sub/sup, autolinks
+latex2mathml>=3.77.0     # $math$ → MathML → Word equations
+Pygments>=2.18.0         # code highlighting
+emoji>=2.12.0            # :shortcode: emoji
 
 # Images: SVG is rasterized with CairoSVG (libcairo ships with LibreOffice),
 # WebP and other formats python-docx can't embed are converted with Pillow
