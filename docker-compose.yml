@@ -19,11 +19,11 @@ services:
       # identical across boxes — only .env differs.
       - "${VPC_BIND_IP:-10.8.96.3}:8080:8080"
     environment:
-      # Tuned to vCPU count — roughly 1.5x is a good starting point. Override
-      # via .env to scale with the box. See .env.example for the sizing guide.
-      - CONVERT_MAX_WORKERS=${CONVERT_MAX_WORKERS:-6}
+      # One worker per vCPU the converter may use. Override via .env to scale
+      # with the box. See .env.example for the sizing guide.
+      - CONVERT_MAX_WORKERS=${CONVERT_MAX_WORKERS:-2}
     # Hard cap on container memory. `mem_limit` is respected by plain
     # `docker compose up`; the Swarm-only `deploy.resources.limits.memory` key
     # would be ignored outside a Swarm stack, so it's intentionally omitted.
     # Leave ~1 GB for host OS overhead; see .env.example for the sizing guide.
-    mem_limit: ${MEMORY_LIMIT:-3G}
+    mem_limit: ${MEMORY_LIMIT:-1500M}

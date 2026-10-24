@@ -25,6 +25,9 @@ FROM python:3.12-slim
 #                                packages/shared/src/workspaces/validation.ts
 #                                (EXPORT_FONTS) in the main repo.
 #   tini                       : proper PID 1, reaps LibreOffice subprocesses
+#   python3-uno                : LibreOffice's Python bindings, for unoserver,
+#                                which keeps LibreOffice running between
+#                                conversions (see app/libreoffice.py)
 #
 # Notes:
 #   - fonts-ibm-plex lives in `contrib`, not `main`, on Debian trixie — we
@@ -40,6 +43,7 @@ RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.lis
         libreoffice-writer \
         libreoffice-calc \
         libreoffice-math \
+        python3-uno \
         fonts-liberation \
         fonts-dejavu \
         fonts-noto-color-emoji \
@@ -77,14 +81,22 @@ WORKDIR /app
 COPY --chown=app:app requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# unoserver runs under the system Python (it needs python3-uno), so it gets
+# its own directory instead of the app's site-packages. It has no
+# dependencies of its own.
+RUN pip install --no-cache-dir --target /opt/unoserver unoserver==3.7
+ENV UNOSERVER_PATH=/opt/unoserver
+
 # App code
 COPY --chown=app:app assets/ assets/
 COPY --chown=app:app app/ app/
 
 USER app
 
-# Default concurrency — override with `-e CONVERT_MAX_WORKERS=N`
-ENV CONVERT_MAX_WORKERS=6
+# Conversions at once — override with `-e CONVERT_MAX_WORKERS=N`. Each
+# worker is a build process plus a running LibreOffice: about one CPU and
+# 0.5 GB of memory.
+ENV CONVERT_MAX_WORKERS=2
 
 EXPOSE 8080
 
@@ -96,6 +108,6 @@ sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz', timeout=5)
 
 # tini wraps uvicorn so signals and subprocesses behave.
 # One uvicorn worker keeps CONVERT_MAX_WORKERS as the single concurrency knob
-# (total concurrency = uvicorn workers × semaphore; we want just the semaphore).
+# (it owns the build processes and the LibreOffice workers).
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
