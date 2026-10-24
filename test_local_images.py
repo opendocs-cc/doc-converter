@@ -3,6 +3,7 @@ import unittest
 from io import BytesIO
 
 from docx import Document
+from docx.oxml.ns import qn
 
 from app.converter import convert_md_to_docx
 
@@ -20,7 +21,9 @@ class LocalImagePathTests(unittest.TestCase):
         doc = Document(BytesIO(docx_bytes))
 
         self.assertEqual(len(doc.inline_shapes), 0)
-        self.assertIn("[Secret]", [p.text for p in doc.paragraphs])
+        # The alt text stands in for the picture (inside the figure box).
+        texts = ["".join(t.text for t in p.iter(qn("w:t"))) for p in doc.element.body.iter(qn("w:p"))]
+        self.assertIn("[Secret]", texts)
 
     def test_file_url_is_not_embedded(self):
         docx_bytes = convert_md_to_docx(

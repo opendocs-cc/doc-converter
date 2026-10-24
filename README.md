@@ -21,8 +21,8 @@ Markdown → tokens → python-docx
 
 ### Step by step
 
-1. **Parse** — [markdown-it-py](https://github.com/executablebooks/markdown-it-py) tokenizes the Markdown (CommonMark + tables)
-2. **Build** — A `DocxBuilder` walks the token stream and constructs a Word document using [python-docx](https://python-docx.readthedocs.io/), applying heading styles, table formatting, list numbering, code block shading, inline formatting (bold, italic, links, underline), formula rendering, and metadata detection
+1. **Parse** — [markdown-it-py](https://github.com/executablebooks/markdown-it-py) tokenizes the Markdown in OpenDocs' dialect (see *Markdown support* below). ```private blocks and front matter never reach the document.
+2. **Build** — A `DocxBuilder` walks the token stream and constructs a Word document using [python-docx](https://python-docx.readthedocs.io/). Quotes, alerts, code blocks and figures are *boxes* (one-cell tables) that can hold any other block, so a heading, list or table inside a quote keeps the quote's bar.
 3. **Brand** — Every color, font, and identity field comes from a `BrandingConfig` passed per-request. Different workspaces can have different styles.
 4. **Serialize** — The document is written to bytes. For DOCX requests, these bytes are returned directly.
 5. **Print to PDF** — For PDF requests, the DOCX is written to a temp file and converted using `soffice --headless --convert-to pdf` (LibreOffice). The resulting PDF is a faithful print of the Word document.
@@ -32,6 +32,26 @@ Markdown → tokens → python-docx
 - **100% consistency** — There is one layout engine making all decisions. Tables wrap the same way, headings break at the same points, footers land in the same position. Two independent renderers will always drift.
 - **Heading navigation** — Word styles (Title, Heading 2-4) appear in the navigation pane and in PDF bookmarks.
 - **Single source of truth** — One converter to maintain, not two. A bug fix to table rendering improves both DOCX and PDF output.
+
+## Markdown support
+
+The converter speaks the same dialect as the web view (`packages/shared/src/markdown` in the main repo), so a document looks the same in all three formats. `testing-docs/md/markdown-showcase/` exercises all of it.
+
+| Syntax | Export |
+|---|---|
+| CommonMark, tables, `~~strike~~`, task lists, footnotes, autolinked URLs | Native Word formatting; footnote references link to their notes |
+| `> [!NOTE]` … `> [!CAUTION]` | Tinted callout box with a coloured bar and title |
+| `$math$`, `$$math$$`, ` ```math `, `formula(...)` | Word equations (OMML) via latex2mathml; prices like `$5 and $10` stay text |
+| Fenced code with a language | Syntax highlighting in GitHub Light colours (Pygments), language label |
+| `==highlight==`, `H~2~O`, `x^2^`, `<kbd>`, `<mark>`, `<sub>`/`<sup>` | Run formatting |
+| Definition lists, `*[ABBR]: …` | Bold term with an indented definition; abbreviation lines are dropped |
+| Images (PNG, JPEG, GIF, WebP, SVG, remote, `data:`) | Sized as the share of the page they take of the 720 px web column; an italic line or title under an image is its caption |
+| Raw HTML | Tables, `<img width>`, `<details>`, centred `<div>`s, inline formatting tags |
+| `\pagebreak`, `<!-- pagebreak -->`, `<div style="page-break-after: always">` | Next block starts a new page |
+| `Key: value \| Key: value` line near the title | Grey metadata line under the title |
+| `:rocket:` | 🚀 |
+
+Run the tests with `python -m unittest test_heading_styles test_local_images test_markdown_coverage`.
 
 ## Running locally
 
@@ -287,7 +307,9 @@ On a 4 vCPU / 8 GB box with 6 workers, expect roughly 80-100 DOCX conversions pe
 
 - **[FastAPI](https://fastapi.tiangolo.com/)** — async HTTP framework
 - **[python-docx](https://python-docx.readthedocs.io/)** — Word document generation
-- **[markdown-it-py](https://github.com/executablebooks/markdown-it-py)** — Markdown parsing (CommonMark + tables)
+- **[markdown-it-py](https://github.com/executablebooks/markdown-it-py)** + mdit-py-plugins — Markdown parsing
+- **[latex2mathml](https://github.com/roniemartinez/latex2mathml)** — `$math$` → MathML, mapped to Word equations in `app/math_omml.py`
+- **[Pygments](https://pygments.org/)** — code highlighting
 - **[LibreOffice](https://www.libreoffice.org/)** — DOCX → PDF conversion (headless mode)
 - **[Pydantic](https://docs.pydantic.dev/)** — request validation and branding config
 - **[httpx](https://www.python-httpx.org/)** — HTTP client for logo downloads

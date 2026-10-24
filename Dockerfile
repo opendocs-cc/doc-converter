@@ -3,9 +3,15 @@ FROM python:3.12-slim
 
 # System dependencies:
 #   libreoffice-writer / -calc : DOCX → PDF conversion
+#   libreoffice-math           : typesets Word equations ($math$); without
+#                                it they print as blank space
 #   fonts-liberation           : Arial / Helvetica / Times metrics match —
 #                                no line-break drift when Arial is absent
-#   fonts-dejavu               : broad Unicode fallback coverage
+#   fonts-dejavu               : broad Unicode fallback coverage (and the
+#                                ☐/☑ task-list boxes)
+#   fonts-noto-color-emoji     : emoji
+#   fonts-noto-cjk             : Chinese, Japanese and Korean
+#   fonts-stix                 : math (LibreOffice typesets equations with it)
 #   fonts-inter, fonts-ibm-plex, : curated free fonts exposed via
 #   fonts-lato, fonts-vollkorn,  BrandingConfig.font_main: five sans
 #   fonts-roboto-unhinted,       (Inter, IBM Plex Sans, Lato, Roboto,
@@ -33,8 +39,12 @@ RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.lis
     && apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
         libreoffice-calc \
+        libreoffice-math \
         fonts-liberation \
         fonts-dejavu \
+        fonts-noto-color-emoji \
+        fonts-noto-cjk \
+        fonts-stix \
         fonts-inter \
         fonts-ibm-plex \
         fonts-lato \
