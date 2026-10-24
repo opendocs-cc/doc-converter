@@ -11,6 +11,10 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+# Curated body fonts that are themselves monospace (see code_block_font).
+MONOSPACE_FONTS = frozenset({"JetBrains Mono"})
+
+
 class BrandingConfig(BaseModel):
     """All visual knobs for a converted document.
 
@@ -84,8 +88,10 @@ class BrandingConfig(BaseModel):
             "Primary font for all non-code text.  Curated options bundled "
             "in the Docker image: 'Arial' (default), 'Inter' (modern "
             "geometric sans), 'IBM Plex Sans' (corporate tech sans), "
-            "'Lato' (warm humanist sans), 'Merriweather' (screen-optimized "
-            "serif), 'Vollkorn' (editorial serif).  Any font name may be "
+            "'Lato' (warm humanist sans), 'Roboto' (familiar neutral sans), "
+            "'Manrope' (modern grotesque), 'Merriweather' (screen-optimized "
+            "serif), 'Vollkorn' (editorial serif), 'EB Garamond' (classic "
+            "book serif), 'JetBrains Mono' (monospace).  Any font name may be "
             "passed; if the font is not installed on the rendering box, "
             "LibreOffice substitutes a similar one when producing PDF."
         ),
@@ -130,6 +136,17 @@ class BrandingConfig(BaseModel):
     )
 
     # ── Helpers ─────────────────────────────────────────────────────────
+
+    @property
+    def code_block_font(self) -> str:
+        """Font for fenced code blocks.
+
+        A monospace body font is used for code too, so a document set in
+        JetBrains Mono doesn't switch to Courier New for its code blocks.
+        """
+        if self.font_main in MONOSPACE_FONTS:
+            return self.font_main
+        return self.font_code
 
     def hex_strip(self, color: str) -> str:
         """Return a bare 6-char hex string (no '#')."""
