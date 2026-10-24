@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field
 
 
 # Curated body fonts that are themselves monospace (see code_block_font).
-MONOSPACE_FONTS = frozenset({"JetBrains Mono"})
+MONOSPACE_FONTS = frozenset({"JetBrains Mono", "JetBrains Mono NL"})
+
+# Code fonts with programming ligatures (``--`` or ``//`` drawn as one
+# glyph) and their no-ligature cut, so commands read exactly as typed.
+CODE_FONT_CUTS = {"JetBrains Mono": "JetBrains Mono NL"}
 
 
 class BrandingConfig(BaseModel):
@@ -97,7 +101,7 @@ class BrandingConfig(BaseModel):
         ),
     )
     font_code: str = Field(
-        default="Courier New",
+        default="JetBrains Mono",
         description="Monospace font for code blocks and inline code",
     )
 
@@ -139,14 +143,13 @@ class BrandingConfig(BaseModel):
 
     @property
     def code_block_font(self) -> str:
-        """Font for fenced code blocks.
+        """Font for code blocks and inline code.
 
         A monospace body font is used for code too, so a document set in
-        JetBrains Mono doesn't switch to Courier New for its code blocks.
+        one monospace never switches to another for its code.
         """
-        if self.font_main in MONOSPACE_FONTS:
-            return self.font_main
-        return self.font_code
+        font = self.font_main if self.font_main in MONOSPACE_FONTS else self.font_code
+        return CODE_FONT_CUTS.get(font, font)
 
     def hex_strip(self, color: str) -> str:
         """Return a bare 6-char hex string (no '#')."""

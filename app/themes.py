@@ -56,7 +56,7 @@ def _theme(
         footer_bold_color=accent,
         footer_normal_color="#737373",
         font_main="Arial",
-        font_code="Courier New",
+        font_code="JetBrains Mono",
         company_name=name,
         company_url=url,
         company_url_label=url_label,
@@ -236,7 +236,7 @@ def brand_from_accent(
     footer_subtitle: str | None = None,
     logo_url: str | None = None,
     font_main: str = "Arial",
-    font_code: str = "Courier New",
+    font_code: str = "JetBrains Mono",
 ) -> BrandingConfig:
     """Derive a full BrandingConfig from a single accent hex.
 

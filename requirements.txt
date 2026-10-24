@@ -1,6 +1,12 @@
 # Core conversion
 python-docx>=1.1.0
 markdown-it-py>=3.0.0
+mdit-py-plugins>=0.5.0   # footnotes
+
+# Images: SVG is rasterized with CairoSVG (libcairo ships with LibreOffice),
+# WebP and other formats python-docx can't embed are converted with Pillow
+cairosvg>=2.8.0
+Pillow>=11.0.0
 
 # HTTP framework
 fastapi>=0.115.0

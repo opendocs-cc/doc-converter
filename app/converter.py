@@ -8,24 +8,30 @@ formula rendering ported from MiCA.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import html as html_lib
 import io
 import ipaddress
 import os
 import re
 import socket
 import tempfile
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from docx import Document
+from docx.image.image import Image as DocxImage
 from docx.shared import Pt, Cm, Inches, RGBColor, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn, nsdecls
 from docx.oxml import parse_xml
+from lxml import etree
 from markdown_it import MarkdownIt
+from mdit_py_plugins.footnote import footnote_plugin
 
 from .branding import BrandingConfig, OPENDOCS_BRAND
 
@@ -101,43 +107,206 @@ def _parse_inline_segments(text: str):
     if last < len(text):
         segments.append({"text": text[last:], "bold": False, "italic": False,
                          "underline": False, "code": False, "link": None})
+    return [dict(_SEGMENT_DEFAULTS, **seg) for seg in segments]
+
+
+_SEGMENT_DEFAULTS = {
+    "text": "", "bold": False, "italic": False, "underline": False,
+    "strike": False, "code": False, "sup": False, "sub": False,
+    "link": None, "image": None,
+}
+
+# Inline HTML tags that map to run formatting. Other tags are dropped and
+# their text kept.
+_HTML_INLINE_STYLES = {
+    "b": "bold", "strong": "bold", "i": "italic", "em": "italic",
+    "u": "underline", "ins": "underline",
+    "s": "strike", "del": "strike", "strike": "strike",
+    "sub": "sub", "sup": "sup", "code": "code", "kbd": "code", "samp": "code",
+}
+
+
+def _html_attr(tag: str, name: str) -> str:
+    m = re.search(rf"""\b{name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", tag, re.I)
+    if not m:
+        return ""
+    return html_lib.unescape(next(g for g in m.groups() if g is not None))
+
+
+def _inline_segments(tokens) -> list[dict]:
+    """Styled text segments from markdown-it inline tokens.
+
+    Working from the parser's tokens (rather than re-serialised Markdown)
+    keeps escaped characters literal: ``\\*not italic\\*`` stays as text.
+    Images become ``image`` segments for the caller to embed.
+    """
+    segments: list[dict] = []
+    depth = {"bold": 0, "italic": 0, "underline": 0, "strike": 0,
+             "code": 0, "sup": 0, "sub": 0}
+    link: Optional[str] = None
+
+    def add(text: str = "", **extra):
+        if not text and not extra.get("image"):
+            return
+        seg = dict(_SEGMENT_DEFAULTS, text=text, link=link)
+        seg.update({k: v > 0 for k, v in depth.items()})
+        seg.update(extra)
+        segments.append(seg)
+
+    def toggle(key: str, opening: bool):
+        depth[key] = max(0, depth[key] + (1 if opening else -1))
+
+    for tok in tokens or []:
+        t = tok.type
+        if t == "text":
+            add(tok.content)
+        elif t == "code_inline":
+            add(tok.content, code=True)
+        elif t == "softbreak":
+            add(" ")
+        elif t == "hardbreak":
+            add("\n")
+        elif t in ("strong_open", "strong_close"):
+            toggle("bold", t == "strong_open")
+        elif t in ("em_open", "em_close"):
+            toggle("italic", t == "em_open")
+        elif t in ("s_open", "s_close"):
+            toggle("strike", t == "s_open")
+        elif t == "link_open":
+            link = tok.attrGet("href") or None
+        elif t == "link_close":
+            link = None
+        elif t == "image":
+            src, alt = _image_src_from_token(tok)
+            add(image=(src, alt))
+        elif t == "footnote_ref":
+            add(str(tok.meta["id"] + 1), sup=True)
+        elif t == "html_inline":
+            m = re.match(r"<\s*(/?)\s*([a-zA-Z][a-zA-Z0-9]*)", tok.content)
+            if not m:
+                continue  # comments, processing instructions
+            closing, name = m.group(1) == "/", m.group(2).lower()
+            if name == "br":
+                add("\n")
+            elif name == "img" and not closing:
+                add(image=(_html_attr(tok.content, "src"), _html_attr(tok.content, "alt")))
+            elif name in _HTML_INLINE_STYLES and not tok.content.rstrip().endswith("/>"):
+                toggle(_HTML_INLINE_STYLES[name], not closing)
+        elif tok.children:
+            segments.extend(_inline_segments(tok.children))
+        elif tok.content:
+            add(tok.content)
     return segments
 
 
-def _add_inline_runs(paragraph, text: str, *,
+def _segments_text(segments: list[dict]) -> str:
+    return "".join(seg["text"] for seg in segments)
+
+
+def _shade_run(run, fill_hex: str):
+    run._r.get_or_add_rPr().insert_element_before(
+        parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="{fill_hex}"/>'),
+        "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang",
+        "w:eastAsianLayout", "w:specVanish", "w:oMath",
+    )
+
+
+# Elements that follow w:pBdr inside w:pPr (Word rejects out-of-order ones).
+_PPR_AFTER_PBDR = (
+    "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap",
+    "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN",
+    "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind",
+    "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc",
+    "w:textDirection", "w:textAlignment", "w:textboxTightWrap",
+    "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange",
+)
+
+
+# Elements that follow w:keepNext inside w:pPr.
+_PPR_AFTER_KEEP_NEXT = (
+    "w:keepLines", "w:pageBreakBefore", "w:framePr", "w:widowControl",
+    "w:numPr", "w:suppressLineNumbers", "w:pBdr",
+) + _PPR_AFTER_PBDR
+
+
+def _set_paragraph_borders(p, sides: dict[str, str]):
+    """Give ``p`` borders, e.g. ``{"left": 'w:val="single" w:sz="18" ...'}``,
+    merged with any it already has."""
+    p_pr = p._p.get_or_add_pPr()
+    pbdr = p_pr.find(qn("w:pBdr"))
+    if pbdr is None:
+        pbdr = p_pr.insert_element_before(parse_xml(f'<w:pBdr {nsdecls("w")}/>'), *_PPR_AFTER_PBDR)
+    existing = {etree.QName(el).localname: el for el in pbdr}
+    for el in list(pbdr):
+        pbdr.remove(el)
+    for side in ("top", "left", "bottom", "right", "between", "bar"):
+        if side in sides:
+            pbdr.append(parse_xml(f'<w:{side} {nsdecls("w")} {sides[side]}/>'))
+        elif side in existing:
+            pbdr.append(existing[side])
+
+
+def _shade_paragraph(p, fill_hex: str):
+    p._p.get_or_add_pPr().insert_element_before(
+        parse_xml(f'<w:shd {nsdecls("w")} w:fill="{fill_hex}" w:val="clear"/>'),
+        *_PPR_AFTER_PBDR[1:],
+    )
+
+
+def _add_inline_runs(paragraph, content, *,
                      base_bold=False, base_italic=False,
-                     base_color: RGBColor, base_font: str, base_size):
-    """Add runs to a paragraph, handling inline markdown formatting."""
-    text = re.sub(r"<br\s*/?>", "\n", text)
-    segments = _parse_inline_segments(text)
-    for seg in segments:
-        if seg["link"]:
+                     base_color: RGBColor, base_font: str, base_size,
+                     code_font: Optional[str] = None, code_bg: Optional[str] = None,
+                     add_image: Optional[Callable] = None):
+    """Add runs to a paragraph.
+
+    ``content`` is a list of segments from ``_inline_segments`` or, for text
+    that didn't come from the parser, a Markdown-ish string. Inline code
+    uses ``code_font`` on a ``code_bg`` wash; image segments are passed to
+    ``add_image(paragraph, src, alt)`` or shown as ``[alt]``.
+    """
+    if isinstance(content, str):
+        content = _parse_inline_segments(re.sub(r"<br\s*/?>", "\n", content))
+    for seg in content:
+        if seg.get("image"):
+            src, alt = seg["image"]
+            if add_image is None or not add_image(paragraph, src, alt):
+                run = paragraph.add_run(f"[{alt or 'image'}]")
+                run.font.name = base_font
+                run.font.size = base_size
+                run.font.color.rgb = base_color
+            continue
+        if seg["link"] and not seg["code"]:
             _add_hyperlink(paragraph, seg["link"], seg["text"],
                            base_color=base_color, underline=True,
                            font_name=base_font, font_size=base_size)
-        elif seg["code"]:
-            # Code spans use the code font but inherit body color
-            run = paragraph.add_run(seg["text"])
-            # We'll set code font from branding in the caller context;
-            # here we just use a slightly smaller size.
-            run.font.name = base_font  # overridden by caller if needed
-            run.font.size = Pt(10)
+            continue
+        parts = seg["text"].split("\n")
+        for pi, part in enumerate(parts):
+            if pi > 0:
+                paragraph.add_run().add_break()
+            if not part:
+                continue
+            run = paragraph.add_run(part)
             run.font.color.rgb = base_color
-        else:
-            parts = seg["text"].split("\n")
-            for pi, part in enumerate(parts):
-                if pi > 0:
-                    br_run = paragraph.add_run()
-                    br_run.add_break()
-                if part:
-                    run = paragraph.add_run(part)
-                    run.font.name = base_font
-                    run.font.size = base_size
-                    run.font.color.rgb = base_color
-                    run.bold = base_bold or seg["bold"]
-                    run.italic = base_italic or seg["italic"]
-                    if seg.get("underline"):
-                        run.underline = True
+            run.bold = base_bold or seg["bold"]
+            run.italic = base_italic or seg["italic"]
+            if seg["code"]:
+                run.font.name = code_font or base_font
+                run.font.size = Pt(max(base_size.pt - 1.5, 6))
+                if code_bg:
+                    _shade_run(run, code_bg)
+            else:
+                run.font.name = base_font
+                run.font.size = base_size
+            if seg["underline"]:
+                run.underline = True
+            if seg["strike"]:
+                run.font.strike = True
+            if seg["sup"]:
+                run.font.superscript = True
+            elif seg["sub"]:
+                run.font.subscript = True
 
 
 def _add_hyperlink(paragraph, url: str, text: str, *,
@@ -177,9 +346,14 @@ def _add_hyperlink(paragraph, url: str, text: str, *,
 # Table helpers
 # ---------------------------------------------------------------------------
 
+# Elements that follow w:tcBorders / w:shd / w:tcMar inside w:tcPr.
+_TCPR_AFTER_BORDERS = ("w:shd", "w:noWrap", "w:tcMar", "w:textDirection",
+                       "w:tcFitText", "w:vAlign", "w:hideMark")
+
+
 def _set_cell_shading(cell, color_hex: str):
     shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}" w:val="clear"/>')
-    cell._tc.get_or_add_tcPr().append(shading)
+    cell._tc.get_or_add_tcPr().insert_element_before(shading, *_TCPR_AFTER_BORDERS[1:])
 
 
 def _set_cell_borders(cell, color_hex: str = "E5E5E5", size: str = "4"):
@@ -192,19 +366,19 @@ def _set_cell_borders(cell, color_hex: str = "E5E5E5", size: str = "4"):
         f'<w:right w:val="single" w:sz="{size}" w:space="0" w:color="{color_hex}"/>'
         f"</w:tcBorders>"
     )
-    tc_pr.append(borders)
+    tc_pr.insert_element_before(borders, *_TCPR_AFTER_BORDERS)
 
 
-def _set_cell_padding(cell, v_padding_inches=0.2, h_padding_inches=0.08):
+def _set_cell_padding(cell, v_padding_inches=0.07, h_padding_inches=0.08):
     """Set cell margins (tcMar).  Note: the paragraph inside the cell still
     inherits Normal's ``space_before``/``space_after``, which is the bigger
     lever for vertical whitespace.  Use ``_set_cell_paragraph_tight()`` on
     the contained paragraph to keep rows compact.
 
-    The v_padding default of 0.2 in (~14.4 pt per side, ~28.8 pt total)
-    gives airy, generously-spaced rows — the kind of table you see in
-    report-style documents rather than dense data grids.  Horizontal
-    padding stays at 0.08 in so cells don't end up visually stretched."""
+    The v_padding default of 0.07 in (~5 pt per side) keeps rows about one
+    and a half lines tall: readable without the double-height rows a
+    report table doesn't need.  Horizontal padding stays at 0.08 in so
+    cells don't end up visually stretched."""
     tc_pr = cell._tc.get_or_add_tcPr()
     v_val = str(int(v_padding_inches * 1440))
     h_val = str(int(h_padding_inches * 1440))
@@ -216,7 +390,7 @@ def _set_cell_padding(cell, v_padding_inches=0.2, h_padding_inches=0.08):
         f'<w:right w:w="{h_val}" w:type="dxa"/>'
         f"</w:tcMar>"
     )
-    tc_pr.append(margins)
+    tc_pr.insert_element_before(margins, *_TCPR_AFTER_BORDERS[3:])
 
 
 def _set_cell_paragraph_tight(p):
@@ -327,7 +501,6 @@ def _add_header(doc: Document, logo_path: str):
 
 _INLINE_IMAGE_TIMEOUT = 15.0
 _INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
-_INLINE_IMAGE_CONTENT_WIDTH = Inches(5.5)
 _REMOTE_FETCH_MAX_REDIRECTS = 3
 _REMOTE_LOGO_MAX_BYTES = 5 * 1024 * 1024
 _BLOCKED_HOSTS = {
@@ -390,37 +563,16 @@ def _image_src_from_token(tok) -> tuple[str, str]:
     return src, alt
 
 
-def _inline_is_image_only(inline_tok) -> tuple[Optional[str], Optional[str]]:
-    """Detect "standalone image" paragraphs.
-
-    A paragraph like ``![alt](url)`` parses to a single inline token whose
-    only meaningful child is an ``image``. If we detect that shape, the
-    caller renders the paragraph as an embedded picture instead of running
-    the inline text through ``_paragraph``. Paragraphs mixing an image with
-    other content fall through to the regular path (the image becomes a
-    ``[alt]`` text placeholder — acceptable for the rare mixed case).
-    """
-    if inline_tok is None or not inline_tok.children:
-        return None, None
-    image_tok = None
-    for child in inline_tok.children:
-        ctype = child.type
-        if ctype == "image":
-            if image_tok is not None:
-                return None, None  # multiple images — bail, render as text
-            image_tok = child
-        elif ctype in ("softbreak", "hardbreak"):
-            continue
-        elif ctype == "text" and not child.content.strip():
-            continue
-        else:
-            return None, None
-    if image_tok is None:
-        return None, None
-    src, alt = _image_src_from_token(image_tok)
-    if not src:
-        return None, None
-    return src, alt
+def _paragraph_images(segments: list[dict]) -> list[tuple[str, str]]:
+    """The images of an image-only paragraph (``![a](x)`` or several images,
+    possibly wrapped in links), else ``[]``. Those are drawn centered at
+    their own size; images mixed with text are embedded inline."""
+    images = [seg["image"] for seg in segments if seg["image"]]
+    if not images:
+        return []
+    if any(not seg["image"] and seg["text"].strip() for seg in segments):
+        return []
+    return images
 
 
 def _download_inline_image(url: str) -> Optional[str]:
@@ -460,51 +612,141 @@ def _download_inline_image(url: str) -> Optional[str]:
                 if resp.status_code >= 400:
                     return None
 
+                # The format is sniffed from the bytes afterwards
+                # (`_prepare_image`), so the content type only screens out
+                # obvious non-images; some origins serve images as
+                # `application/octet-stream`.
                 ctype = (resp.headers.get("content-type") or "").lower().split(";")[0].strip()
-                mime_ext = {
-                    "image/jpeg": ".jpg",
-                    "image/jpg": ".jpg",
-                    "image/pjpeg": ".jpg",
-                    "image/png": ".png",
-                    "image/gif": ".gif",
-                    "image/bmp": ".bmp",
-                    "image/x-bmp": ".bmp",
-                }.get(ctype)
-                suffix = mime_ext
-                if not suffix:
-                    # Fall back to the URL's path extension — some origins
-                    # serve image/jpeg as `application/octet-stream`.
-                    path_part = current_url.split("?", 1)[0].split("#", 1)[0].lower()
-                    for ext in (".jpeg", ".jpg", ".png", ".gif", ".bmp"):
-                        if path_part.endswith(ext):
-                            suffix = ".jpg" if ext == ".jpeg" else ext
-                            break
-                if not suffix:
-                    # SVG / WebP / TIFF / unknown — python-docx cannot embed
-                    # these reliably across Word + LibreOffice. Fall back to
-                    # the alt-text placeholder so the export still completes.
+                if ctype.startswith(("text/html", "application/json", "video/", "audio/")):
                     return None
 
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-                total = 0
-                try:
-                    for chunk in resp.iter_bytes():
-                        if not chunk:
-                            continue
-                        total += len(chunk)
-                        if total > _INLINE_IMAGE_MAX_BYTES:
-                            raise ValueError("image exceeds size cap")
-                        tmp.write(chunk)
-                    tmp.close()
-                    return tmp.name
-                except Exception:
-                    tmp.close()
-                    try:
-                        os.unlink(tmp.name)
-                    except OSError:
-                        pass
-                    return None
+                data = bytearray()
+                for chunk in resp.iter_bytes():
+                    data.extend(chunk)
+                    if len(data) > _INLINE_IMAGE_MAX_BYTES:
+                        return None
+                return _prepare_image(bytes(data))
         return None
+    except Exception:
+        return None
+
+
+def _data_uri_image(uri: str) -> Optional[str]:
+    """Decode a ``data:image/...;base64,...`` URI and prepare it."""
+    m = re.match(r"data:image/[a-z0-9.+-]+;base64,(.*)$", uri.strip(), re.I | re.S)
+    if not m or len(m.group(1)) > _INLINE_IMAGE_MAX_BYTES * 4 // 3 + 4:
+        return None
+    try:
+        data = base64.b64decode(re.sub(r"\s+", "", m.group(1)), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return _prepare_image(data)
+
+
+# Formats python-docx embeds as-is, by magic bytes.
+_NATIVE_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+    (b"BM", ".bmp"),
+)
+_SVG_UNITS_PX = {"": 1.0, "px": 1.0, "pt": 4 / 3, "pc": 16.0,
+                 "mm": 96 / 25.4, "cm": 96 / 2.54, "in": 96.0}
+# Rasterized images: at most this many pixels wide or tall, and drawn at
+# up to 3x their CSS size so they stay sharp in print.
+_RASTER_MAX_SIDE = 2400
+_RASTER_MAX_PIXELS = 40_000_000
+
+
+def _write_temp(data: bytes, suffix: str) -> str:
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    with tmp:
+        tmp.write(data)
+    return tmp.name
+
+
+def _looks_like_svg(data: bytes) -> bool:
+    head = data[:2048].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    return head.startswith((b"<svg", b"<?xml", b"<!--", b"<!doctype svg")) and b"<svg" in data[:4096].lower()
+
+
+def _svg_length_px(value: Optional[str]) -> Optional[float]:
+    m = re.fullmatch(r"\s*([0-9]*\.?[0-9]+)\s*([a-z%]*)\s*", value or "")
+    if not m or m.group(2) not in _SVG_UNITS_PX:
+        return None
+    return float(m.group(1)) * _SVG_UNITS_PX[m.group(2)]
+
+
+def _rasterize_svg(data: bytes) -> Optional[bytes]:
+    """Render an SVG to PNG, sized from its own width/height/viewBox.
+
+    CairoSVG runs in its default safe mode: no XML entities, no external
+    files and no network, only ``data:`` URLs inside the SVG. The output
+    size is fixed up front so an SVG that declares a huge canvas can't
+    exhaust memory. The PNG's DPI records the scale, so it's placed at the
+    SVG's CSS size.
+    """
+    try:
+        root = etree.fromstring(
+            data, etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
+        )
+    except etree.XMLSyntaxError:
+        return None
+    if etree.QName(root).localname != "svg":
+        return None
+    width = _svg_length_px(root.get("width"))
+    height = _svg_length_px(root.get("height"))
+    viewbox = [float(v) for v in re.split(r"[\s,]+", (root.get("viewBox") or "").strip()) if v]
+    if len(viewbox) == 4 and viewbox[2] > 0 and viewbox[3] > 0:
+        aspect = viewbox[2] / viewbox[3]
+        if width is None and height is None:
+            width, height = viewbox[2], viewbox[3]
+        elif width is None:
+            width = height * aspect
+        elif height is None:
+            height = width / aspect
+    if not width or not height:
+        width, height = 600.0, 400.0
+    scale = min(3.0, _RASTER_MAX_SIDE / width, _RASTER_MAX_SIDE / height)
+    out_w, out_h = max(1, round(width * scale)), max(1, round(height * scale))
+    try:
+        import cairosvg
+        from PIL import Image
+
+        png = cairosvg.svg2png(bytestring=data, output_width=out_w, output_height=out_h)
+        with Image.open(io.BytesIO(png)) as img:
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", dpi=(96 * scale, 96 * scale))
+            return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _prepare_image(data: bytes) -> Optional[str]:
+    """Write ``data`` to a temp file python-docx can embed and return its path.
+
+    PNG, JPEG, GIF and BMP are kept as they are. SVG is rasterized and
+    anything else Pillow can read (WebP, TIFF, AVIF, ICO...) becomes a PNG.
+    The caller owns the returned file.
+    """
+    for signature, suffix in _NATIVE_IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return _write_temp(data, suffix)
+    if _looks_like_svg(data):
+        png = _rasterize_svg(data)
+        return _write_temp(png, ".png") if png else None
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            if img.width * img.height > _RASTER_MAX_PIXELS:
+                return None
+            img.seek(0)
+            converted = img.convert("RGBA" if "A" in img.getbands() or img.mode == "P" else "RGB")
+            buf = io.BytesIO()
+            converted.save(buf, format="PNG")
+            return _write_temp(buf.getvalue(), ".png")
     except Exception:
         return None
 
@@ -669,21 +911,6 @@ def _detect_metadata_line(line: str) -> bool:
     return kv_count >= 2
 
 
-def _parse_table_alignments(separator_row: str) -> list[str]:
-    """Parse alignment markers from a markdown table separator row."""
-    alignments: list[str] = []
-    cells = [c.strip() for c in separator_row.split("|") if c.strip()]
-    for cell in cells:
-        cell = cell.strip()
-        if cell.startswith(":") and cell.endswith(":"):
-            alignments.append("center")
-        elif cell.endswith(":"):
-            alignments.append("right")
-        else:
-            alignments.append("left")
-    return alignments
-
-
 # ---------------------------------------------------------------------------
 # DocxBuilder — walks markdown-it tokens and builds a python-docx Document
 # ---------------------------------------------------------------------------
@@ -721,9 +948,17 @@ class DocxBuilder:
         self._current_list_level = 0
         self._num_id_counter = 100
         self._current_num_id: int | None = None
+        # How many blockquotes the current block sits in.
+        self._quote_depth = 0
+        # The last code block paragraph, to keep adjacent blocks apart.
+        self._last_code_p = None
 
         self._setup_page()
         self._setup_styles()
+
+        section = self.doc.sections[0]
+        self._content_width = section.page_width - section.left_margin - section.right_margin
+        self._content_height = Cm(18)
 
     # ── Page setup ──────────────────────────────────────────────────────
 
@@ -772,12 +1007,15 @@ class DocxBuilder:
         st.paragraph_format.space_before = Pt(0)
         st.paragraph_format.space_after = Pt(30)
         st.paragraph_format.line_spacing = 1.25
+        # The template's Title has a bottom rule; replace it with none.
         p_pr = st.element.get_or_add_pPr()
-        p_pr.append(parse_xml(
+        for old in p_pr.findall(qn("w:pBdr")):
+            p_pr.remove(old)
+        p_pr.insert_element_before(parse_xml(
             f'<w:pBdr {nsdecls("w")}>'
             f'<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
             f"</w:pBdr>"
-        ))
+        ), *_PPR_AFTER_PBDR)
 
         # Heading 1 (body H1)
         sh1 = styles["Heading 1"]
@@ -862,7 +1100,38 @@ class DocxBuilder:
 
     # ── Content methods ─────────────────────────────────────────────────
 
-    def _heading(self, level: int, text: str, *, as_title: bool = False):
+    def _runs(self, p, content, *, bold=False, italic=False,
+              color: RGBColor | None = None, size=Pt(11)):
+        """Add inline content to ``p`` in the brand's fonts and colors."""
+        _add_inline_runs(
+            p, content, base_bold=bold, base_italic=italic,
+            base_color=color or self._c_body, base_font=self.brand.font_main,
+            base_size=size, code_font=self.brand.code_block_font,
+            code_bg=self._h_code_bg, add_image=self._add_picture_run,
+        )
+
+    def _apply_quote(self, p, base_indent=Cm(0)):
+        """Indent ``p`` and give it a brand-colored bar if it's in a quote.
+
+        Consecutive paragraphs with the same border are drawn with one
+        continuous bar, so a multi-paragraph quote reads as one block.
+        """
+        if not self._quote_depth:
+            return
+        pf = p.paragraph_format
+        pf.left_indent = base_indent + Cm(0.75 * self._quote_depth)
+        if pf.space_before is None or pf.space_before > Pt(4):
+            pf.space_before = Pt(4)
+        if pf.space_after is None or pf.space_after > Pt(4):
+            pf.space_after = Pt(4)
+        _set_paragraph_borders(p, {
+            "left": f'w:val="single" w:sz="18" w:space="10" w:color="{_hex_strip(self.brand.heading_color)}"',
+        })
+        for run in p.runs:
+            if run.font.color.rgb == self._c_body:
+                run.font.color.rgb = _hex_to_rgb("#404040")
+
+    def _heading(self, level: int, text, *, as_title: bool = False):
         b = self.brand
 
         # Insert a page break before this heading if configured.
@@ -885,24 +1154,19 @@ class DocxBuilder:
 
         if level == 1 and as_title:
             p = self.doc.add_paragraph(style="Title")
-            _add_inline_runs(p, text, base_bold=True, base_color=self._c_heading,
-                             base_font=b.font_main, base_size=Pt(18))
+            self._runs(p, text, bold=True, color=self._c_heading, size=Pt(18))
         elif level == 1:
             p = self.doc.add_paragraph(style="Heading 1")
-            _add_inline_runs(p, text, base_bold=True, base_color=self._c_heading,
-                             base_font=b.font_main, base_size=Pt(17))
+            self._runs(p, text, bold=True, color=self._c_heading, size=Pt(17))
         elif level == 2:
             p = self.doc.add_paragraph(style="Heading 2")
-            _add_inline_runs(p, text, base_bold=True, base_color=self._c_heading,
-                             base_font=b.font_main, base_size=Pt(14))
+            self._runs(p, text, bold=True, color=self._c_heading, size=Pt(14))
         elif level == 3:
             p = self.doc.add_paragraph(style="Heading 3")
-            _add_inline_runs(p, text, base_bold=False, base_color=self._c_heading,
-                             base_font=b.font_main, base_size=Pt(12))
+            self._runs(p, text, bold=False, color=self._c_heading, size=Pt(12))
         else:
             p = self.doc.add_paragraph(style="Heading 4")
-            _add_inline_runs(p, text, base_bold=True, base_color=self._c_heading,
-                             base_font=b.font_main, base_size=Pt(11))
+            self._runs(p, text, bold=True, color=self._c_heading, size=Pt(11))
 
         # Apply page-break-before if this heading qualifies
         if (self._page_break_level is not None
@@ -913,50 +1177,68 @@ class DocxBuilder:
 
         return p
 
-    def _paragraph(self, text: str):
+    def _paragraph(self, content, *, bold=False):
         p = self.doc.add_paragraph(style="Normal")
-        _add_inline_runs(p, text, base_color=self._c_body,
-                         base_font=self.brand.font_main, base_size=Pt(11))
+        self._runs(p, content, bold=bold)
+        self._apply_quote(p)
         return p
 
-    def _image(self, src: str, alt: str):
-        """Embed a standalone image paragraph.
+    def _add_picture_run(self, paragraph, src: str, alt: str) -> bool:
+        """Append ``src`` to ``paragraph`` as a picture; ``False`` if it fails.
 
-        Falls back to an ``[alt]`` placeholder paragraph if the image can't
-        be fetched, decoded, or embedded — so a single broken URL never
-        aborts the export.
+        Only remote and ``data:`` images are embedded. Markdown comes from
+        untrusted users, so a local path (e.g. `/dev/zero`, `/etc/...`)
+        must never be read off the converter's own filesystem. Pictures
+        keep their natural size (CSS pixels at 96 per inch), shrunk to fit
+        the page.
         """
-        placeholder = f"[{alt}]" if alt else "[image]"
-        tmp_path: Optional[str] = None
-        tmp_is_owned = False
+        src = (src or "").strip()
+        if src.startswith(("http://", "https://")):
+            path = _download_inline_image(src)
+        elif src.lower().startswith("data:image/"):
+            path = _data_uri_image(src)
+        else:
+            path = None
+        if path is None:
+            return False
         try:
-            # Only remote images are embedded. Markdown comes from untrusted
-            # users, so a local path (e.g. `/dev/zero`, `/etc/...`) must never
-            # be read off the converter's own filesystem.
-            if src.startswith(("http://", "https://")):
-                tmp_path = _download_inline_image(src)
-                tmp_is_owned = tmp_path is not None
-            if tmp_path is None or not os.path.exists(tmp_path):
-                return self._paragraph(placeholder)
-
-            p = self.doc.add_paragraph(style="Normal")
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run()
-            try:
-                run.add_picture(tmp_path, width=_INLINE_IMAGE_CONTENT_WIDTH)
-            except Exception:
-                # python-docx couldn't decode the payload (truncated, wrong
-                # magic bytes, unsupported format). Drop the empty paragraph
-                # and fall back to the text placeholder.
-                p._p.getparent().remove(p._p)
-                return self._paragraph(placeholder)
-            return p
+            image = DocxImage.from_file(path)
+            dpi = image.horz_dpi if image.horz_dpi and image.horz_dpi > 96 else 96
+            width = Emu(int(image.px_width / dpi * 914400))
+            height = Emu(int(width * image.px_height / max(image.px_width, 1)))
+            max_width = self._content_width - (paragraph.paragraph_format.left_indent or 0)
+            if width > max_width:
+                height = Emu(int(height * max_width / width))
+                width = max_width
+            if height > self._content_height:
+                width = Emu(int(width * self._content_height / height))
+            paragraph.add_run().add_picture(path, width=width)
+            return True
+        except Exception:
+            # python-docx couldn't decode the payload (truncated, wrong
+            # magic bytes, unsupported format).
+            return False
         finally:
-            if tmp_is_owned and tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def _image(self, images: list[tuple[str, str]]):
+        """A centered paragraph of one or more images.
+
+        An image that can't be fetched, decoded or embedded shows as its
+        ``[alt]`` text, so a single broken URL never aborts the export.
+        """
+        p = self.doc.add_paragraph(style="Normal")
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        self._apply_quote(p)
+        for n, (src, alt) in enumerate(images):
+            if n:
+                p.add_run(" ")
+            if not self._add_picture_run(p, src, alt):
+                self._runs(p, f"[{alt or 'image'}]")
+        return p
 
     def _metadata_line(self, text: str):
         p = self.doc.add_paragraph(style="Normal")
@@ -973,13 +1255,10 @@ class DocxBuilder:
         p = self.doc.add_paragraph(style="Normal")
         p.paragraph_format.space_before = Pt(12)
         p.paragraph_format.space_after = Pt(12)
-        p_pr = p._p.get_or_add_pPr()
-        borders = parse_xml(
-            f'<w:pBdr {nsdecls("w")}>'
-            f'<w:bottom w:val="single" w:sz="4" w:space="1" w:color="{self._h_border}"/>'
-            f"</w:pBdr>"
-        )
-        p_pr.append(borders)
+        p.paragraph_format.line_spacing = Pt(2)
+        _set_paragraph_borders(p, {
+            "bottom": f'w:val="single" w:sz="6" w:space="1" w:color="{self._h_code_border}"',
+        })
 
     def _formula(self, text: str):
         """Add a formula as an OMML math paragraph (renders natively in Word)."""
@@ -1001,7 +1280,7 @@ class DocxBuilder:
 
     # ── Numbering (ordered lists) ───────────────────────────────────────
 
-    def _create_numbering(self):
+    def _create_numbering(self, start: int = 1):
         self._num_id_counter += 1
         abstract_num_id = self._num_id_counter
         num_id = self._num_id_counter
@@ -1017,7 +1296,7 @@ class DocxBuilder:
         for lvl, (ind, hang) in enumerate(indents):
             abstract_xml += (
                 f'<w:lvl w:ilvl="{lvl}">'
-                f'  <w:start w:val="1"/>'
+                f'  <w:start w:val="{start}"/>'
                 f'  <w:numFmt w:val="decimal"/>'
                 f'  <w:lvlText w:val="%{lvl + 1}."/>'
                 f'  <w:lvlJc w:val="left"/>'
@@ -1058,61 +1337,106 @@ class DocxBuilder:
 
     # ── List items ──────────────────────────────────────────────────────
 
-    def _list_item(self, text: str, *, ordered: bool = False, level: int = 0):
-        letter_ordered = False
-        if not ordered:
-            stripped = text.lstrip()
-            if re.match(r"^\([a-z]+\)\s", stripped):
-                letter_ordered = True
+    @staticmethod
+    def _list_text_indent(level: int):
+        """Where a list item's text starts (bullets and numbers line up)."""
+        return Cm(1.27 + 0.63 * level)
 
-        if letter_ordered:
+    def _list_item(self, content, *, ordered: bool = False, level: int = 0,
+                   num_id: int | None = None, task: bool | None = None):
+        """One list item. ``task`` is ``True``/``False`` for a checked or
+        open task-list item (``- [x]`` / ``- [ ]``), drawn with a box
+        instead of a bullet."""
+        text = content if isinstance(content, str) else _segments_text(content)
+        letter_ordered = not ordered and re.match(r"^\([a-z]+\)\s", text.lstrip())
+
+        if letter_ordered or task is not None:
             p = self.doc.add_paragraph(style="Normal")
-            p.paragraph_format.space_before = Pt(2)
-            p.paragraph_format.space_after = Pt(2)
-            p.paragraph_format.left_indent = Cm(1.27 + level * 0.63)
-            p.paragraph_format.first_line_indent = Cm(-0.63)
-            _add_inline_runs(p, text, base_color=self._c_body,
-                             base_font=self.brand.font_main, base_size=Pt(11))
+            pf = p.paragraph_format
+            pf.space_before = Pt(2)
+            pf.space_after = Pt(2)
+            pf.left_indent = self._list_text_indent(level)
+            pf.first_line_indent = Cm(-0.63)
+            if task is not None:
+                pf.tab_stops.add_tab_stop(pf.left_indent)
+                box = p.add_run(("☑" if task else "☐") + "\t")
+                box.font.name = "DejaVu Sans"
+                box.font.size = Pt(11)
+                box.font.color.rgb = self._c_heading if task else self._c_body
+            self._runs(p, content)
+            self._apply_quote(p, pf.left_indent)
             return p
 
         if not ordered:
             style_names = ["List Bullet", "List Bullet 2", "List Bullet 3"]
             style_idx = min(level, len(style_names) - 1)
             p = self.doc.add_paragraph(style=style_names[style_idx])
-            _add_inline_runs(p, text, base_color=self._c_body,
-                             base_font=self.brand.font_main, base_size=Pt(11))
+            self._runs(p, content)
+            self._apply_quote(p, self._list_text_indent(level))
             return p
 
         p = self.doc.add_paragraph(style="Normal")
         p.paragraph_format.space_before = Pt(2)
         p.paragraph_format.space_after = Pt(2)
-        if self._current_num_id is not None:
-            self._apply_numbering(p, self._current_num_id, level=level)
-        _add_inline_runs(p, text, base_color=self._c_body,
-                         base_font=self.brand.font_main, base_size=Pt(11))
+        num_id = num_id if num_id is not None else self._current_num_id
+        if num_id is not None:
+            self._apply_numbering(p, num_id, level=level)
+        self._runs(p, content)
+        self._apply_quote(p, self._list_text_indent(level))
+        return p
+
+    def _list_continuation(self, content, *, level: int = 0):
+        """A later paragraph of a list item: indented, without a bullet."""
+        p = self.doc.add_paragraph(style="Normal")
+        pf = p.paragraph_format
+        pf.space_before = Pt(2)
+        pf.space_after = Pt(4)
+        pf.left_indent = self._list_text_indent(level)
+        self._runs(p, content)
+        self._apply_quote(p, pf.left_indent)
+        return p
+
+    def _footnote(self, number: int, content):
+        p = self.doc.add_paragraph(style="Normal")
+        pf = p.paragraph_format
+        pf.space_before = Pt(0)
+        pf.space_after = Pt(3)
+        pf.left_indent = Cm(0.5)
+        pf.first_line_indent = Cm(-0.5)
+        pf.tab_stops.add_tab_stop(Cm(0.5))
+        mark = p.add_run(f"{number}\t")
+        mark.font.name = self.brand.font_main
+        mark.font.size = Pt(9)
+        mark.font.color.rgb = self._c_heading
+        self._runs(p, content, size=Pt(9))
         return p
 
     # ── Code blocks ─────────────────────────────────────────────────────
 
-    def _code_block(self, text: str):
+    def _code_block(self, text: str, *, indent=None):
         p = self.doc.add_paragraph(style="Normal")
         p.paragraph_format.space_before = Pt(6)
         p.paragraph_format.space_after = Pt(6)
         p.paragraph_format.line_spacing = 1.0
+        if indent is not None:
+            p.paragraph_format.left_indent = indent
+        # Adjacent paragraphs with identical borders are drawn as one box,
+        # so two code blocks in a row get a small spacer between them.
+        if self._last_code_p is not None and p._p.getprevious() is self._last_code_p._p:
+            spacer = self.doc.add_paragraph(style="Normal")
+            spacer.paragraph_format.space_before = Pt(0)
+            spacer.paragraph_format.space_after = Pt(0)
+            spacer.paragraph_format.line_spacing = Pt(4)
+            p._p.addprevious(spacer._p)
+        self._last_code_p = p
+        if self._quote_depth:
+            p.paragraph_format.left_indent = (indent or Cm(0)) + Cm(0.75 * self._quote_depth)
 
-        p_pr = p._p.get_or_add_pPr()
-        shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{self._h_code_bg}" w:val="clear"/>')
-        p_pr.append(shading)
-
-        borders = parse_xml(
-            f'<w:pBdr {nsdecls("w")}>'
-            f'<w:top w:val="single" w:sz="4" w:space="2" w:color="{self._h_code_border}"/>'
-            f'<w:left w:val="single" w:sz="4" w:space="4" w:color="{self._h_code_border}"/>'
-            f'<w:bottom w:val="single" w:sz="4" w:space="2" w:color="{self._h_code_border}"/>'
-            f'<w:right w:val="single" w:sz="4" w:space="4" w:color="{self._h_code_border}"/>'
-            f"</w:pBdr>"
-        )
-        p_pr.append(borders)
+        _set_paragraph_borders(p, {
+            side: f'w:val="single" w:sz="4" w:space="{space}" w:color="{self._h_code_border}"'
+            for side, space in (("top", 2), ("left", 4), ("bottom", 2), ("right", 4))
+        })
+        _shade_paragraph(p, self._h_code_bg)
 
         run = p.add_run(text)
         run.font.name = self.brand.code_block_font
@@ -1121,8 +1445,9 @@ class DocxBuilder:
 
     # ── Tables ──────────────────────────────────────────────────────────
 
-    def _add_table(self, header_row: list[str], body_rows: list[list[str]],
+    def _add_table(self, header_row: list, body_rows: list[list],
                    alignments: list[str] | None = None):
+        """``header_row`` and ``body_rows`` hold cell segments (or strings)."""
         if not header_row:
             return
 
@@ -1155,10 +1480,8 @@ class DocxBuilder:
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 elif alignments[i] == "right":
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            _add_inline_runs(p, cell_text.strip(), base_bold=True,
-                             base_color=self._c_table_hdr_fg,
-                             base_font=self.brand.font_main,
-                             base_size=table_font_size)
+            self._runs(p, cell_text, bold=True, color=self._c_table_hdr_fg,
+                       size=table_font_size)
 
         # Body rows
         for row_idx, row_data in enumerate(body_rows):
@@ -1179,9 +1502,7 @@ class DocxBuilder:
                         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     elif alignments[i] == "right":
                         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                _add_inline_runs(p, cell_text.strip(), base_color=self._c_body,
-                                 base_font=self.brand.font_main,
-                                 base_size=table_font_size)
+                self._runs(p, cell_text, size=table_font_size)
 
     # ── Finalize ────────────────────────────────────────────────────────
 
@@ -1196,64 +1517,89 @@ class DocxBuilder:
 # Token-level list / table processors
 # ---------------------------------------------------------------------------
 
+_TASK_MARKER = re.compile(r"^\[([ xX])\]\s+")
+
+
+def _take_task_marker(segments: list[dict]) -> Optional[bool]:
+    """Strip a leading ``[ ]`` / ``[x]`` and return whether it was checked."""
+    if not segments or segments[0]["image"] or segments[0]["code"]:
+        return None
+    m = _TASK_MARKER.match(segments[0]["text"])
+    if not m:
+        return None
+    segments[0] = dict(segments[0], text=segments[0]["text"][m.end():])
+    return m.group(1) != " "
+
+
 def _process_list(tokens, start: int, builder: DocxBuilder,
                   ordered: bool, level: int) -> int:
+    """Render a list. The first paragraph of each item gets the bullet or
+    number; later paragraphs, code blocks, quotes and tables inside the
+    item are indented under it."""
     list_type = "bullet_list" if not ordered else "ordered_list"
     close_tag = f"{list_type}_close"
+    num_id = None
+    if ordered:
+        try:
+            first_number = int(tokens[start].attrGet("start") or 1)
+        except (TypeError, ValueError):
+            first_number = 1
+        num_id = builder._create_numbering(start=first_number)
     i = start + 1
-
-    if ordered and level == 0:
-        builder._create_numbering()
 
     while i < len(tokens):
         tok = tokens[i]
         if tok.type == close_tag:
             return i + 1
-
-        if tok.type == "list_item_open":
+        if tok.type != "list_item_open":
             i += 1
-            while i < len(tokens) and tokens[i].type != "list_item_close":
-                if tokens[i].type == "paragraph_open":
-                    i += 1
-                    if i < len(tokens) and tokens[i].type == "inline":
-                        text = (_extract_text_from_inline_tokens(tokens[i].children)
-                                if tokens[i].children else tokens[i].content)
-                        builder._list_item(text, ordered=ordered, level=level)
-                    i += 1  # paragraph_close
-                elif tokens[i].type == "bullet_list_open":
-                    i = _process_list(tokens, i, builder, ordered=False, level=level + 1)
-                    continue
-                elif tokens[i].type == "ordered_list_open":
-                    i = _process_list(tokens, i, builder, ordered=True, level=level + 1)
-                    continue
-                else:
-                    pass
-                i += 1
-            i += 1  # list_item_close
             continue
 
         i += 1
+        first_paragraph = True
+        while i < len(tokens) and tokens[i].type != "list_item_close":
+            t = tokens[i]
+            if t.type == "paragraph_open":
+                inline = tokens[i + 1] if i + 1 < len(tokens) else None
+                segments = _inline_segments(inline.children) if inline is not None else []
+                if first_paragraph:
+                    task = None if ordered else _take_task_marker(segments)
+                    builder._list_item(segments, ordered=ordered, level=level,
+                                       num_id=num_id, task=task)
+                    first_paragraph = False
+                else:
+                    builder._list_continuation(segments, level=level)
+                i += 3  # paragraph_open, inline, paragraph_close
+            elif t.type in ("bullet_list_open", "ordered_list_open"):
+                i = _process_list(tokens, i, builder,
+                                  ordered=t.type == "ordered_list_open", level=level + 1)
+            elif t.type in ("fence", "code_block"):
+                builder._code_block(t.content.rstrip("\n"),
+                                    indent=builder._list_text_indent(level))
+                i += 1
+            elif t.type == "blockquote_open":
+                builder._quote_depth += 1
+                i += 1
+            elif t.type == "blockquote_close":
+                builder._quote_depth = max(0, builder._quote_depth - 1)
+                i += 1
+            elif t.type == "table_open":
+                i = _process_table(tokens, i, builder, "")
+            else:
+                i += 1
+        i += 1  # list_item_close
     return i
 
 
-def _process_table(tokens, start: int, builder: DocxBuilder, md_text: str) -> int:
+def _process_table(tokens, start: int, builder: DocxBuilder, md_text: str = "") -> int:
+    """Render a table. Column alignment comes from the header cells'
+    ``text-align`` style, which markdown-it sets from the ``:---:`` row."""
     i = start + 1
-    header_cells: list[str] = []
-    body_rows: list[list[str]] = []
-    current_row: list[str] = []
+    header_cells: list = []
+    body_rows: list[list] = []
+    current_row: list = []
+    alignments: list[str] = []
     in_header = False
-    in_body = False
-
-    alignments = None
-    if tokens[start].map:
-        table_start_line = tokens[start].map[0]
-        table_end_line = tokens[start].map[1]
-        raw_lines = md_text.split("\n")
-        for line_idx in range(table_start_line, min(table_end_line, len(raw_lines))):
-            line = raw_lines[line_idx].strip()
-            if re.match(r"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$", line):
-                alignments = _parse_table_alignments(line)
-                break
 
     while i < len(tokens):
         tok = tokens[i]
@@ -1265,10 +1611,6 @@ def _process_table(tokens, start: int, builder: DocxBuilder, md_text: str) -> in
             in_header = True
         elif tok.type == "thead_close":
             in_header = False
-        elif tok.type == "tbody_open":
-            in_body = True
-        elif tok.type == "tbody_close":
-            in_body = False
         elif tok.type == "tr_open":
             current_row = []
         elif tok.type == "tr_close":
@@ -1278,13 +1620,15 @@ def _process_table(tokens, start: int, builder: DocxBuilder, md_text: str) -> in
                 body_rows.append(current_row)
             current_row = []
         elif tok.type in ("th_open", "td_open"):
+            if tok.type == "th_open":
+                m = re.search(r"text-align:\s*(left|center|right)", tok.attrGet("style") or "")
+                alignments.append(m.group(1) if m else "left")
             i += 1
-            cell_text = ""
+            cell: list = []
             if i < len(tokens) and tokens[i].type == "inline":
-                cell_text = (_extract_text_from_inline_tokens(tokens[i].children)
-                             if tokens[i].children else tokens[i].content)
+                cell = _inline_segments(tokens[i].children)
                 i += 1
-            current_row.append(cell_text)
+            current_row.append(cell)
             if i < len(tokens) and tokens[i].type in ("th_close", "td_close"):
                 i += 1
             continue
@@ -1293,6 +1637,52 @@ def _process_table(tokens, start: int, builder: DocxBuilder, md_text: str) -> in
     if header_cells:
         builder._add_table(header_cells, body_rows, alignments)
     return i
+
+
+def _render_html_block(html: str, builder: DocxBuilder) -> bool:
+    """Render a raw HTML block as text: comments are dropped, ``<img>``
+    tags become images, ``<summary>`` is bold and other tags are stripped.
+    Returns whether anything was added."""
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    added = False
+    images = [(_html_attr(tag, "src"), _html_attr(tag, "alt"))
+              for tag in re.findall(r"<img\b[^>]*>", html, flags=re.I)]
+    if images:
+        builder._image(images)
+        added = True
+        html = re.sub(r"<img\b[^>]*>", "", html, flags=re.I)
+    is_summary = bool(re.search(r"<summary\b", html, re.I))
+    html = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
+    text = html_lib.unescape(re.sub(r"<[^>]+>", "", html))
+    text = "\n".join(line.strip() for line in text.strip().splitlines() if line.strip())
+    if text:
+        builder._paragraph([dict(_SEGMENT_DEFAULTS, text=text)], bold=is_summary)
+        added = True
+    return added
+
+
+def _process_footnotes(tokens, start: int, builder: DocxBuilder) -> int:
+    """Footnotes go at the end under a short rule, numbered like their
+    superscript references."""
+    builder._hr()
+    i = start + 1
+    number = 0
+    first = True
+    while i < len(tokens) and tokens[i].type != "footnote_block_close":
+        tok = tokens[i]
+        if tok.type == "footnote_open":
+            number = tok.meta["id"] + 1
+            first = True
+        elif tok.type == "inline":
+            segments = _inline_segments(tok.children)
+            if first:
+                builder._footnote(number, segments)
+                first = False
+            else:
+                p = builder._footnote(number, segments)
+                p.runs[0].text = "\t"
+        i += 1
+    return i + 1
 
 
 # ---------------------------------------------------------------------------
@@ -1377,9 +1767,19 @@ def convert_md_to_docx(
     if pre_heading_meta and not metadata_text:
         builder._metadata_line("  |  ".join(pre_heading_meta))
 
-    # Parse tokens
+    # Parse tokens: CommonMark plus GitHub's tables, strikethrough and
+    # footnotes. Task lists are handled in _process_list.
     md = MarkdownIt("commonmark", {"typographer": True})
-    md.enable("table")
+    md.enable(["table", "strikethrough"])
+    md.use(footnote_plugin)
+    # markdown-it only allows GIF/PNG/JPEG/WebP data: URLs (a guard for
+    # HTML output). SVG is rasterized here without scripts or external
+    # files, so it's safe too.
+    default_validate_link = md.validateLink
+    md.validateLink = lambda url: (
+        url.strip().lower().startswith("data:image/svg+xml;base64,")
+        or default_validate_link(url)
+    )
     tokens = md.parse(md_text)
 
     # Walk tokens
@@ -1402,14 +1802,12 @@ def convert_md_to_docx(
             level = int(tok.tag[1])
             i += 1
             if i < len(tokens) and tokens[i].type == "inline":
-                text = (_extract_text_from_inline_tokens(tokens[i].children)
-                        if tokens[i].children else tokens[i].content)
                 as_title = (
                     level == 1
                     and not seen_heading
                     and not emitted_body_content
                 )
-                builder._heading(level, text, as_title=as_title)
+                builder._heading(level, _inline_segments(tokens[i].children), as_title=as_title)
                 seen_heading = True
             i += 2  # skip heading_close + advance
             continue
@@ -1418,14 +1816,22 @@ def convert_md_to_docx(
             i += 1
             if i < len(tokens) and tokens[i].type == "inline":
                 inline_tok = tokens[i]
-                # Standalone image paragraph → embed as picture rather than
-                # rendering the alt text as a `[alt]` placeholder.
-                img_src, img_alt = _inline_is_image_only(inline_tok)
-                if img_src is not None:
-                    builder._image(img_src, img_alt or "")
+                segments = _inline_segments(inline_tok.children)
+                images = _paragraph_images(segments)
+                if images:
+                    previous = builder._image(images)._p.getprevious()
+                    if previous is not None and previous.tag == qn("w:p"):
+                        text_before = "".join(previous.itertext()).rstrip()
+                        if text_before.endswith(":"):
+                            ppr = previous.get_or_add_pPr()
+                            ppr.insert_element_before(
+                                parse_xml(f'<w:keepNext {nsdecls("w")}/>'),
+                                *_PPR_AFTER_KEEP_NEXT,
+                            )
                     emitted_body_content = True
                     i += 2
                     continue
+                # Metadata and formulas are matched on the Markdown text
                 text = (_extract_text_from_inline_tokens(inline_tok.children)
                         if inline_tok.children else inline_tok.content)
                 # Skip already-processed metadata
@@ -1444,12 +1850,23 @@ def convert_md_to_docx(
                     emitted_body_content = True
                     i += 2
                     continue
-                builder._paragraph(text)
+                builder._paragraph(segments)
                 emitted_body_content = True
             i += 2
             continue
 
+        elif tok.type == "blockquote_open":
+            builder._quote_depth += 1
+            i += 1
+            continue
+
+        elif tok.type == "blockquote_close":
+            builder._quote_depth = max(0, builder._quote_depth - 1)
+            i += 1
+            continue
+
         elif tok.type == "hr":
+            builder._hr()
             i += 1
             continue
 
@@ -1470,16 +1887,18 @@ def convert_md_to_docx(
             continue
 
         elif tok.type == "table_open":
-            i = _process_table(tokens, i, builder, md_text)
+            i = _process_table(tokens, i, builder)
             emitted_body_content = True
             continue
 
         elif tok.type == "html_block":
-            text = tok.content.strip()
-            if text:
-                builder._paragraph(text)
+            if _render_html_block(tok.content, builder):
                 emitted_body_content = True
             i += 1
+            continue
+
+        elif tok.type == "footnote_block_open":
+            i = _process_footnotes(tokens, i, builder)
             continue
 
         else:
