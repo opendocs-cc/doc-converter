@@ -214,20 +214,26 @@ External URLs are fetched with a 10 s timeout and a descriptive `User-Agent`. If
 
 #### `font_main` options
 
-Four fonts are bundled in the Docker image and can be selected by name. Any other font name is accepted too, but if it isn't installed LibreOffice substitutes a similar face when producing PDF.
+Ten fonts are bundled in the Docker image and can be selected by name. Any other font name is accepted too, but if it isn't installed LibreOffice substitutes a similar face when producing PDF.
 
-| Name                | Debian package     | Character             | Good for                          |
-| ------------------- | ------------------ | --------------------- | --------------------------------- |
-| `Arial` _(default)_ | `fonts-liberation` | Neutral, universal    | Everything — the safe default     |
-| `Inter`             | `fonts-inter`      | Modern geometric sans | Tech / SaaS reports, product docs |
-| `Lato`              | `fonts-lato`       | Warm humanist sans    | Business prose, proposals         |
-| `Vollkorn`          | `fonts-vollkorn`   | Editorial serif       | Legal, finance, academic          |
+| Name                | Package                 | Character              | Good for                              |
+| ------------------- | ----------------------- | ---------------------- | ------------------------------------- |
+| `Arial` _(default)_ | `fonts-liberation`      | Neutral, universal     | Everything; the safe default          |
+| `Inter`             | `fonts-inter`           | Modern geometric sans  | Product specs, design docs            |
+| `IBM Plex Sans`     | `fonts-ibm-plex`        | Corporate tech sans    | Board updates, memos, policies        |
+| `Lato`              | `fonts-lato`            | Warm humanist sans     | Handbooks, onboarding, how-tos        |
+| `Roboto`            | `fonts-roboto-unhinted` | Familiar neutral sans  | Reports and docs of any kind          |
+| `Manrope`           | `fonts-manrope`         | Modern grotesque       | Launches, one-pagers, announcements   |
+| `Merriweather`      | static TTF download     | Screen-optimized serif | Whitepapers, studies, research        |
+| `Vollkorn`          | `fonts-vollkorn`        | Editorial serif        | Essays and long reports               |
+| `EB Garamond`       | static TTF download     | Classic book serif     | Proposals, letters, formal reports    |
+| `JetBrains Mono`    | `fonts-jetbrains-mono`  | Monospace              | Changelogs, runbooks, incident reviews |
 
 ```json
 { "branding": { "font_main": "Vollkorn" } }
 ```
 
-`font_code` stays `Courier New` by default — change it per-request if you want a different monospace for code blocks.
+`font_code` stays `Courier New` by default; change it per-request if you want a different monospace for code blocks. When `font_main` is `JetBrains Mono`, code blocks use it too.
 
 ## Pre-built themes
 

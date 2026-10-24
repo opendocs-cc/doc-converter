@@ -1115,7 +1115,7 @@ class DocxBuilder:
         p_pr.append(borders)
 
         run = p.add_run(text)
-        run.font.name = self.brand.font_code
+        run.font.name = self.brand.code_block_font
         run.font.size = Pt(9)
         run.font.color.rgb = self._c_body
 
