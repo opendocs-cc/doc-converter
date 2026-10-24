@@ -69,6 +69,7 @@ async def _build_docx(req: "ConvertRequest", brand: BrandingConfig) -> bytes:
         landscape=req.landscape,
         page_break_before=req.page_break_before,
         skip_first_break=req.skip_first_break,
+        signature_fields=req.signature_fields,
     )
     loop = asyncio.get_running_loop()
     try:
@@ -135,6 +136,15 @@ class ConvertRequest(BaseModel):
         description=(
             "When true, the very first heading that would trigger a page "
             "break is skipped — avoids a blank first page."
+        ),
+    )
+    signature_fields: bool = Field(
+        default=False,
+        description=(
+            "Put invisible DocuSeal field tags in each ```signature box "
+            "(signature and signing date per role), for documents sent for "
+            "e-signature. DocuSeal finds the tags, places its fields there "
+            "and removes them."
         ),
     )
     accent_color: Optional[str] = Field(

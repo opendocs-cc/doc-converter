@@ -25,6 +25,7 @@ def convert_md_to_pdf(
     landscape: bool = False,
     page_break_before: int | None = None,
     skip_first_break: bool = True,
+    signature_fields: bool = False,
 ) -> bytes:
     """Convert markdown to PDF by going through DOCX first.
 
@@ -37,5 +38,6 @@ def convert_md_to_pdf(
         landscape=landscape,
         page_break_before=page_break_before,
         skip_first_break=skip_first_break,
+        signature_fields=signature_fields,
     )
     return convert_oneshot(docx_bytes)
