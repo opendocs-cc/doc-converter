@@ -21,6 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import asynccontextmanager
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
@@ -214,6 +215,15 @@ async def health():
     return _health()
 
 
+def _attachment(filename: str) -> str:
+    """Content-Disposition for any filename. Headers must be Latin-1, so a
+    title like "Contract — 26 October" is sent as an ASCII fallback plus the
+    RFC 5987 UTF-8 form instead of crashing the response."""
+    cleaned = filename.replace('"', "").replace("\\", "")
+    fallback = cleaned.encode("ascii", "replace").decode("ascii").replace("?", "-")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(cleaned)}"
+
+
 @app.post("/convert/docx")
 async def convert_docx(req: ConvertRequest):
     """Convert markdown to a Word document (.docx)."""
@@ -223,13 +233,10 @@ async def convert_docx(req: ConvertRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    safe_name = req.filename.replace('"', "")
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}.docx"',
-        },
+        headers={"Content-Disposition": _attachment(f"{req.filename}.docx")},
     )
 
 
@@ -243,11 +250,8 @@ async def convert_pdf(req: ConvertRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    safe_name = req.filename.replace('"', "")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}.pdf"',
-        },
+        headers={"Content-Disposition": _attachment(f"{req.filename}.pdf")},
     )
