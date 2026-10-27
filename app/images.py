@@ -151,11 +151,25 @@ class _PublicOnlyTransport(httpx.HTTPTransport):
     us, to whatever the name resolves to on its side."""
 
     def __init__(self) -> None:
-        super().__init__()
+        ssl_context = _ssl_context()
+        super().__init__(verify=ssl_context)
         self._pool = httpcore.ConnectionPool(
-            ssl_context=httpx.create_ssl_context(),
+            ssl_context=ssl_context,
             network_backend=_PublicOnlyBackend(),
         )
+
+
+_ssl_context_lock = threading.Lock()
+_ssl_context_cached = None
+
+
+def _ssl_context():
+    """httpx's default TLS settings, loaded once and shared."""
+    global _ssl_context_cached
+    with _ssl_context_lock:
+        if _ssl_context_cached is None:
+            _ssl_context_cached = httpx.create_ssl_context()
+        return _ssl_context_cached
 
 
 @contextmanager
