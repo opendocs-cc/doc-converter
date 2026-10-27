@@ -35,7 +35,7 @@ Markdown → tokens → python-docx
 
 ## Markdown support
 
-The converter speaks the same dialect as the web view (`packages/shared/src/markdown` in the main repo), so a document looks the same in all three formats. `testing-docs/md/markdown-showcase/` exercises all of it.
+The converter speaks the same dialect as the OpenDocs web view, so a document looks the same in all three formats.
 
 | Syntax | Export |
 |---|---|
@@ -52,7 +52,7 @@ The converter speaks the same dialect as the web view (`packages/shared/src/mark
 | ` ```signature ` block (`- role:` / `name:` / `title:` entries) | Signature boxes, two per row: a blank area over a line (muted text colour), the name in bold (or the role), title and role in muted text, and a date line; kept on one page with the heading above it. With `signature_fields: true` each box also carries invisible DocuSeal tags (`{{<role> signature;type=signature;role=<role>;…}}`, `{{<role> date;type=datenow;role=<role>;…}}`) sized to the signature area and the date line. A block that isn't valid stays a code block |
 | `:rocket:` | 🚀 |
 
-Run the tests with `python -m unittest test_heading_styles test_local_images test_markdown_coverage test_signature_blocks`.
+Run the tests with `python -m unittest test_heading_styles test_local_images test_markdown_coverage test_remote_images test_signature_blocks test_throughput` (or `pytest test_*.py` if you have pytest installed). They need no network and no LibreOffice. `test_convert.py` is not a unit test but a script that renders sample documents from a local `testing-docs/md/` folder, which isn't part of this repository.
 
 ## Running locally
 
@@ -60,22 +60,26 @@ Two paths. Use Python directly for fast iteration, or Docker when you want to ru
 
 ### Option A — Python + venv (fastest dev loop)
 
+Needs Python 3.12 (the version the Docker image uses).
+
 ```bash
 cd doc-converter
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
 uvicorn app.main:app --reload --port 8080
 ```
 
-`--reload` restarts the server on file changes. The `/convert/pdf` endpoint needs LibreOffice on `$PATH` — install once via `brew install --cask libreoffice` (macOS) or `apt install libreoffice-writer libreoffice-calc` (Linux). `/convert/docx` works without it.
+`--reload` restarts the server on file changes. The `/convert/pdf` endpoint needs LibreOffice's `soffice` on `$PATH` — install once via `brew install --cask libreoffice` (macOS) or `apt install libreoffice-writer libreoffice-calc libreoffice-math` (Linux). `/convert/docx` works without it. SVG images need the cairo library (`brew install cairo` or `apt install libcairo2`); without it they're replaced by their alt text.
+
+Outside Docker there are no warm LibreOffice workers (that needs unoserver and LibreOffice's Python bindings, set up by the Dockerfile), so each PDF starts LibreOffice itself and `/health` reports `"libreoffice_ready": 0`. The output is the same, just slower.
 
 Smoke-test:
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok","version":"0.1.0","max_workers":2,"libreoffice_ready":2}
+# {"status":"ok","version":"0.1.0","max_workers":2,"libreoffice_ready":0}
 
 curl -X POST http://localhost:8080/convert/docx \
   -H 'Content-Type: application/json' \
@@ -93,12 +97,19 @@ docker run --rm -p 8080:8080 opendocs-converter
 
 Same `curl` commands work. LibreOffice, fonts, and tini are baked into the image — nothing else to install.
 
+To run it with Docker Compose instead (as on a server, see [SETUP.md](SETUP.md)), copy `.env.example` to `.env` first: it sets `VPC_BIND_IP=127.0.0.1`, the address the port is published on.
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
 ### What the Docker image does
 
 - Boots under `tini` as PID 1 (reaps LibreOffice subprocesses, forwards SIGTERM cleanly).
 - Runs a single uvicorn worker as a non-root user (`app`, uid 10001).
 - Runs `CONVERT_MAX_WORKERS` conversions at once (see *Concurrency*). Override at runtime with `-e CONVERT_MAX_WORKERS=N`; one worker per CPU is the fastest setting.
-- Reports container health by polling `/health` every 30s — `docker ps` and orchestrators pick it up.
+- Reports container health by polling `/healthz` every 30s — `docker ps` and orchestrators pick it up.
 
 ## API
 
@@ -232,7 +243,7 @@ Defaults match the **OpenDocs house style** — a deep Purple-950 accent (`#2E1C
 | `"bundled:opendocs"` | Use the packaged OpenDocs logo shipped with the image             | Free — OpenDocs branding is locked on                  |
 | `"https://..."`      | Download the image at request time and embed it (PNG / JPG / GIF) | Pro — customer-supplied logo on Cloudflare / S3 / etc. |
 
-External URLs are fetched with a 10 s timeout and a descriptive `User-Agent`. If the download fails the document still renders — just without the logo.
+External URLs are fetched with a 10 s timeout and a descriptive `User-Agent`, and only from public addresses (as are images in the Markdown): a URL whose host resolves to a private, loopback or link-local address is refused, and so is every redirect to one. If the download fails the document still renders — just without the logo.
 
 #### `font_main` options
 
@@ -332,4 +343,10 @@ The previous version (one conversion at a time, starting LibreOffice for every P
 
 ## License
 
-Closed source. This service is part of the OpenDocs platform infrastructure.
+The converter is source-available under the [Functional Source License 1.1, MIT Future License](LICENSE) (FSL-1.1-MIT), © 2026 Contrarian Capital ehf. You may use, copy, modify and redistribute it for any purpose except a competing use, which means making it available to others in a commercial product or service that substitutes for it or for OpenDocs, or offers substantially similar functionality; internal use, non-commercial education and research, and professional services for licensees are explicitly allowed. Each release also becomes available under the MIT license two years after it's published.
+
+Third-party components keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). To report a security issue, see [SECURITY.md](SECURITY.md).
+
+### Trademark
+
+"OpenDocs" and the OpenDocs logo are trademarks of Contrarian Capital ehf., and the license grants no rights to them. Forks must not use the OpenDocs name or logo (including the bundled `assets/logo.png`) for their own product or service; saying that a fork is based on this project is fine.

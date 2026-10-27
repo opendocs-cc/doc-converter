@@ -27,9 +27,11 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterable, NamedTuple, Optional
+from contextlib import contextmanager
+from typing import Iterable, Iterator, NamedTuple, Optional
 from urllib.parse import urljoin, urlparse
 
+import httpcore
 import httpx
 from lxml import etree
 
@@ -56,11 +58,21 @@ _BLOCKED_HOSTS = {
 }
 
 
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+
+
 def _is_private_ip(address: str) -> bool:
     try:
-        ip = ipaddress.ip_address(address)
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
     except ValueError:
         return True
+    # An IPv6 address can carry an IPv4 one (``::ffff:10.0.0.1``, or NAT64's
+    # ``64:ff9b::10.0.0.1``); judge the IPv4 address it reaches.
+    if ip.version == 6:
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64_PREFIX:
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return not ip.is_global
 
 
@@ -75,6 +87,9 @@ def _is_blocked_host(host: str) -> bool:
 
 
 def _is_safe_remote_url(url: str) -> bool:
+    """Early check of a URL before it's requested: http(s), not a blocked
+    name, and resolving only to public addresses. The connection itself is
+    checked again (``_PublicOnlyBackend``), against the address it uses."""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return False
@@ -87,6 +102,91 @@ def _is_safe_remote_url(url: str) -> bool:
         return False
     addresses = {info[4][0] for info in infos}
     return bool(addresses) and all(not _is_private_ip(addr) for addr in addresses)
+
+
+def _public_addresses(host: str, port: int) -> list[str]:
+    """The addresses ``host`` resolves to, if every one of them is public.
+    Raises ``httpcore.ConnectError`` otherwise."""
+    if _is_blocked_host(host):
+        raise httpcore.ConnectError(f"refusing to connect to {host!r}")
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise httpcore.ConnectError(f"could not resolve {host!r}: {exc}") from exc
+    addresses = list(dict.fromkeys(info[4][0] for info in infos))
+    if not addresses or any(_is_private_ip(addr) for addr in addresses):
+        raise httpcore.ConnectError(f"refusing to connect to {host!r}: not a public address")
+    return addresses
+
+
+class _PublicOnlyBackend(httpcore.SyncBackend):
+    """Opens TCP connections only to public addresses.
+
+    The host is resolved here, once, and the socket connects to the address
+    that was checked. Checking the URL first and letting the HTTP client
+    resolve the name again would leave a DNS-rebinding window: a name can
+    answer with a public address for the check and a private one (the
+    metadata server, a service on the private network) for the connection.
+
+    Only the TCP connection uses the address. The request's Host header and
+    TLS (SNI and certificate checks) still use the hostname from the URL,
+    because httpcore takes those from the request, not from this call.
+    """
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        last_error: Optional[Exception] = None
+        for address in _public_addresses(host, port):
+            try:
+                return super().connect_tcp(address, port, timeout=timeout,
+                                           local_address=local_address,
+                                           socket_options=socket_options)
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last_error = exc
+        raise last_error or httpcore.ConnectError(f"could not connect to {host!r}")
+
+
+class _PublicOnlyTransport(httpx.HTTPTransport):
+    """``httpx.HTTPTransport`` whose connections go through
+    ``_PublicOnlyBackend``. No proxy: a proxy would make the connection for
+    us, to whatever the name resolves to on its side."""
+
+    def __init__(self) -> None:
+        ssl_context = _ssl_context()
+        super().__init__(verify=ssl_context)
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=ssl_context,
+            network_backend=_PublicOnlyBackend(),
+        )
+
+
+_ssl_context_lock = threading.Lock()
+_ssl_context_cached = None
+
+
+def _ssl_context():
+    """httpx's default TLS settings, loaded once and shared."""
+    global _ssl_context_cached
+    with _ssl_context_lock:
+        if _ssl_context_cached is None:
+            _ssl_context_cached = httpx.create_ssl_context()
+        return _ssl_context_cached
+
+
+@contextmanager
+def _stream_public(url: str, *, timeout: float, headers: dict) -> Iterator[httpx.Response]:
+    """``httpx.stream("GET", url)`` that only ever connects to public
+    addresses (see ``_PublicOnlyBackend``). Redirects are not followed: the
+    caller checks each ``Location`` and makes a new request, which is
+    checked again when it connects."""
+    with httpx.Client(
+        transport=_PublicOnlyTransport(),
+        trust_env=False,  # no proxies from the environment
+        timeout=timeout,
+        follow_redirects=False,
+        headers=headers,
+    ) as client:
+        with client.stream("GET", url) as resp:
+            yield resp
 
 
 # Recently downloaded images, per process. Images on OpenDocs' own storage
@@ -179,13 +279,7 @@ def _download(url: str) -> Optional[bytes]:
             if not _is_safe_remote_url(current_url):
                 return None
 
-            with httpx.stream(
-                "GET",
-                current_url,
-                timeout=_INLINE_IMAGE_TIMEOUT,
-                follow_redirects=False,
-                headers=headers,
-            ) as resp:
+            with _stream_public(current_url, timeout=_INLINE_IMAGE_TIMEOUT, headers=headers) as resp:
                 if 300 <= resp.status_code < 400:
                     location = resp.headers.get("location")
                     if not location:
@@ -398,13 +492,7 @@ def resolve_logo(brand: BrandingConfig) -> tuple[Optional[str], bool]:
             for _hop in range(_REMOTE_FETCH_MAX_REDIRECTS + 1):
                 if not _is_safe_remote_url(current_url):
                     return None, False
-                with httpx.stream(
-                    "GET",
-                    current_url,
-                    timeout=10,
-                    follow_redirects=False,
-                    headers=headers,
-                ) as resp:
+                with _stream_public(current_url, timeout=10, headers=headers) as resp:
                     if 300 <= resp.status_code < 400:
                         location = resp.headers.get("location")
                         if not location:

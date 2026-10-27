@@ -1,8 +1,8 @@
-# Standalone compose for the doc-converter box (Vultr Box B).
+# Standalone compose for the doc-converter box.
 #
-# The converter runs on its own VPS, separate from the main OpenDocs stack.
-# The main API box (Box A) reaches this service over Vultr's private network
-# via `DOC_CONVERTER_URL=http://<Box B private IP>:8080`.
+# The converter runs on its own server, separate from the main OpenDocs stack.
+# The API server reaches this service over a private network
+# via `DOC_CONVERTER_URL=http://<converter private IP>:8080`.
 #
 # Public access is blocked by binding :8080 to a private interface only — set
 # VPC_BIND_IP in .env to the box's VPC IP (or 127.0.0.1 for same-host API).
@@ -17,7 +17,7 @@ services:
       # Publish :8080 only on the interface named by VPC_BIND_IP (from .env).
       # Keeping the IP in .env (not in this file) means the compose config is
       # identical across boxes — only .env differs.
-      - "${VPC_BIND_IP:-10.8.96.3}:8080:8080"
+      - "${VPC_BIND_IP:-127.0.0.1}:8080:8080"
     environment:
       # One worker per vCPU the converter may use. Override via .env to scale
       # with the box. See .env.example for the sizing guide.

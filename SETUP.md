@@ -37,9 +37,8 @@ docker compose version
 ## 1. Get the code onto your server
 
 ```bash
-# Option A: Clone from your private repo
 ssh your-server
-git clone git@github.com:your-org/doc-converter.git
+git clone https://github.com/your-org/doc-converter.git   # this repository, or your fork
 cd doc-converter
 ```
 
@@ -56,8 +55,10 @@ Open `.env` and set the three values for your box:
 | Variable              | Default     | What to set                                                                                                               |
 | --------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `CONVERT_MAX_WORKERS` | `3`         | Conversions at once: one per vCPU the converter may use. More workers than CPUs is slower, not faster.                    |
-| `MEMORY_LIMIT`        | `3G`        | Hard cap on the container: about 0.5 GB plus 0.5 GB per worker. Each worker keeps a LibreOffice running (150–300 MB).      |
-| `VPC_BIND_IP`         | `10.8.96.3` | The interface the container publishes `:8080` on. Set to the box's VPC IP (private-only), or `127.0.0.1` for same-host API. |
+| `MEMORY_LIMIT`        | `2G`        | Hard cap on the container: about 0.5 GB plus 0.5 GB per worker. Each worker keeps a LibreOffice running (150–300 MB).      |
+| `VPC_BIND_IP`         | `127.0.0.1` | The interface the container publishes `:8080` on. Keep `127.0.0.1` when the API runs on the same host; otherwise set the box's private (VPC) IP, e.g. `10.0.0.20`. Never a public interface: the converter has no authentication. |
+
+Always set `VPC_BIND_IP` in `.env`. The fallback in `docker-compose.yml` is a private address from the original deployment, which won't exist on your box.
 
 ### Sizing guide
 
@@ -122,14 +123,14 @@ Open both files — they should look identical. Purple headings, styled table, "
 
 ## 6. Set up a reverse proxy (optional but recommended)
 
-If you want the converter accessible via a subdomain (e.g., `convert.opendocs.cc`), add it to your Caddy or Nginx config.
+If you want the converter accessible via a subdomain (e.g., `convert.example.com`), add it to your Caddy or Nginx config.
 
 ### Caddy example
 
 Add to your `Caddyfile`:
 
 ```
-convert.opendocs.cc {
+convert.example.com {
     reverse_proxy localhost:8080
 }
 ```
@@ -145,11 +146,11 @@ docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```nginx
 server {
     listen 443 ssl;
-    server_name convert.opendocs.cc;
+    server_name convert.example.com;
 
     # SSL certs (use certbot or similar)
-    ssl_certificate /etc/letsencrypt/live/convert.opendocs.cc/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/convert.opendocs.cc/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/convert.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/convert.example.com/privkey.pem;
 
     client_max_body_size 10M;
 
@@ -173,7 +174,7 @@ In production the converter should only be reachable from your API server — ne
                        ▼
            ┌───────────────────────────┐
            │ API server                │  Public IP:  45.x.x.x
-           │ api.opendocs.cc           │  Private IP: 10.0.0.10
+           │ api.example.com           │  Private IP: 10.0.0.10
            │ (Next.js / FastAPI / ...) │
            └──────────┬────────────────┘
                       │ HTTP over private network
@@ -185,7 +186,7 @@ In production the converter should only be reachable from your API server — ne
            └───────────────────────────┘
                       ▲
                       │ Both servers in the same
-                      │ Vultr VPC ("VPC 2.0")
+                      │ private network (VPC)
 ```
 
 The converter listens on a **private-only** address. Your API calls it. No TLS, no auth middleware, no public exposure — the network itself is the boundary.
@@ -208,12 +209,12 @@ docker compose up -d
 
 Your API calls `http://localhost:8080/convert/docx` directly. Nothing outside the box can reach the converter — the OS network stack enforces it.
 
-### Option B — Separate VPS on a Vultr VPC (the pattern in the diagram)
+### Option B — Separate server on a private network (the pattern in the diagram)
 
 There are three moving pieces.
 
-**1. Provision a VPC in the Vultr console.**
-A VPC is a private L2 network that only your own servers see. You create one in the Vultr "VPC 2.0" section, then attach each server to it. Each server gets a second NIC with a `10.x.x.x` address that is not routable from the internet.
+**1. Put both servers on a private network.**
+Most cloud providers call it a VPC: a private network that only your own servers see. Create one in your provider's console and attach each server to it. Each server gets a private address (for example `10.x.x.x`) that is not routable from the internet.
 
 **2. Bind the container to the private NIC only.**
 
@@ -235,14 +236,14 @@ Then:
 docker compose up -d
 ```
 
-The compose file publishes port 8080 only on the private NIC (`${VPC_BIND_IP}:8080:8080`). The public NIC has nothing listening on 8080. Add a Vultr firewall rule denying inbound 8080 on the public interface as belt-and-suspenders.
+The compose file publishes port 8080 only on the private NIC (`${VPC_BIND_IP}:8080:8080`). The public NIC has nothing listening on 8080. Add a firewall rule at your provider denying inbound 8080 on the public interface as belt-and-suspenders.
 
 **3. Reach it from your API.** You have two options for the URL the API uses.
 
 | Approach                   | Setup                                                                                                                                  | URL your API calls                         |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | **Private IP directly**    | Nothing — just hardcode the `10.x.x.x` address (or put it in `DOC_CONVERTER_URL` env var).                                             | `http://10.0.0.20:8080`                    |
-| **Internal DNS subdomain** | Add an A-record: `convert.internal.opendocs.cc → 10.0.0.20`. DNS resolution is public, but the returned IP only routes inside the VPC. | `http://convert.internal.opendocs.cc:8080` |
+| **Internal DNS subdomain** | Add an A-record: `convert.internal.example.com → 10.0.0.20`. DNS resolution is public, but the returned IP only routes inside the VPC. | `http://convert.internal.example.com:8080` |
 
 The internal-DNS approach is cleaner — you can move the converter to a new box and just update the DNS record, no redeploy. An attacker can `dig` the record and see `10.0.0.20`, but they can't route there from outside the VPC.
 
@@ -250,7 +251,7 @@ The internal-DNS approach is cleaner — you can move the converter to a new box
 
 ```ts
 const CONVERTER_URL = process.env.DOC_CONVERTER_URL!;
-// e.g. "http://convert.internal.opendocs.cc:8080"
+// e.g. "http://convert.internal.example.com:8080"
 //  or  "http://10.0.0.20:8080"
 
 const res = await fetch(`${CONVERTER_URL}/convert/pdf`, {
@@ -273,7 +274,7 @@ No TLS, no bearer tokens, no signing — traffic never leaves the VPC.
 Sometimes compliance or defense-in-depth demands TLS even on private networks. Let's Encrypt's **HTTP-01 challenge won't work** because it can't reach a private IP. Use **DNS-01** instead — Caddy does this with one config block when your DNS is on a supported provider (Cloudflare, Route 53, etc.):
 
 ```caddy
-convert.internal.opendocs.cc {
+convert.internal.example.com {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
@@ -281,9 +282,9 @@ convert.internal.opendocs.cc {
 }
 ```
 
-Caddy will issue and renew the cert entirely through DNS. Your API then calls `https://convert.internal.opendocs.cc` — fully encrypted, private-only.
+Caddy will issue and renew the cert entirely through DNS. Your API then calls `https://convert.internal.example.com` — fully encrypted, private-only.
 
-Until you actually need this, plain HTTP over the VPC is fine. Vultr's VPC is isolated at the hypervisor level; adding TLS on top has real handshake-latency cost and doesn't change the threat model meaningfully.
+Until you actually need this, plain HTTP over the VPC is fine. Cloud VPCs are isolated at the hypervisor level; adding TLS on top has real handshake-latency cost and doesn't change the threat model meaningfully.
 
 ## 8. Updating
 
@@ -369,4 +370,4 @@ A typical PDF takes well under a second of CPU, but requests queue when more arr
 
 ### Connection refused from API server
 
-Check that the converter is bound to the right interface. `docker compose ps` shows the port mapping — the left side should match `VPC_BIND_IP` in `.env`. If using VPC, verify both servers are in the same Vultr VPC and the private IP is reachable (e.g. `ping 10.0.0.20` from the API box).
+Check that the converter is bound to the right interface. `docker compose ps` shows the port mapping — the left side should match `VPC_BIND_IP` in `.env`. If using VPC, verify both servers are in the same VPC and the private IP is reachable (e.g. `ping 10.0.0.20` from the API box).
