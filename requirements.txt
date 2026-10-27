@@ -18,5 +18,7 @@ uvicorn[standard]>=0.34.0
 # Branding / validation
 pydantic>=2.10.0
 
-# Logo download
+# Image and logo downloads. httpcore is httpx's transport; app/images.py
+# gives it a backend that only connects to checked public addresses.
 httpx>=0.28.0
+httpcore>=1.0.0
