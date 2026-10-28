@@ -1,6 +1,6 @@
 # Third-party notices
 
-The OpenDocs Document Converter is licensed under FSL-1.1-MIT (see [LICENSE](LICENSE)). It uses the third-party components below, which keep their own licenses. None of them is modified; the Python packages are installed from PyPI by `pip install -r requirements.txt` and the system packages from Debian by the [Dockerfile](Dockerfile). Nothing below is copied into this repository.
+The OpenDocs Document Converter is licensed under the MIT license (see [LICENSE](LICENSE)). It uses the third-party components below, which keep their own licenses. None of them is modified; the Python packages are installed from PyPI by `pip install -r requirements.txt` and the system packages from Debian by the [Dockerfile](Dockerfile). Nothing below is copied into this repository.
 
 This list covers the notable components. The full license texts ship with each package: in each Python package's `*.dist-info` directory, and for Debian packages in `/usr/share/doc/<package>/copyright` inside the image.
 
