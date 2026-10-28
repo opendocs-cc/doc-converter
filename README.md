@@ -343,7 +343,7 @@ The previous version (one conversion at a time, starting LibreOffice for every P
 
 ## License
 
-The converter is source-available under the [Functional Source License 1.1, MIT Future License](LICENSE) (FSL-1.1-MIT), © 2026 Contrarian Capital ehf. You may use, copy, modify and redistribute it for any purpose except a competing use, which means making it available to others in a commercial product or service that substitutes for it or for OpenDocs, or offers substantially similar functionality; internal use, non-commercial education and research, and professional services for licensees are explicitly allowed. Each release also becomes available under the MIT license two years after it's published.
+The converter is open source under the [MIT license](LICENSE), © 2026 Contrarian Capital ehf. Until 2026-10-28 it was published under FSL-1.1-MIT. Pull requests are welcome; for anything bigger than a small fix, open an issue first.
 
 Third-party components keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). To report a security issue, see [SECURITY.md](SECURITY.md).
 
